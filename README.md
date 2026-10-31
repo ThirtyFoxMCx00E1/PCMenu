@@ -30,7 +30,9 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 - Transparent backdrop (T build): the game frame is copied from `CHud::Draw` while you play
   (`RwRasterPushContext` + `RwRasterRenderFast`), then drawn blurred under the menu. The title menu stays opaque.
 - PC style loading screen: cycles `PCMenu/pc/lds/mobilesc0.png` .. `mobilesc27.png` (missing numbers are skipped)
-  with a crossfade, plus a PC style progress bar (`pc/images/ProgressTex.png`) with LOADING and the percentage.
+  with a crossfade, plus the PC style progress bar: a thin grey bar with a black outline just under the "San Andreas" logo (no text, no background strip).
+  The picture is framed like the PC game (`SplashFit=PC`; `Fit` / `Fill` also available). All pictures are prepared on the
+  main thread before loading starts (`SplashPreload`, default 3); the loading thread only draws, which fixes the freeze after New Game / Load Game.
   Options: `LoadingScreen`, `SplashFirst`, `SplashLast`, `SplashSeconds`, `Order`, `ProgressBar`, `LoadingMusic`.
 
 ## Build

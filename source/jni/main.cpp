@@ -41,9 +41,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.0, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.1, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.0, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.1, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -297,7 +297,6 @@ static bool TransparentBackdrop();                                       // pcex
 static bool TransparentPicture();
 static void LoadResources();
 static std::string OwnerOf(uintptr_t addr);
-static void* g_texProgress = NULL;
 static void LoadConfig()
 {
     std::string txt = ReadFileText(g_dirPC + "pcmenu.ini");
@@ -2125,7 +2124,6 @@ static void LoadResources()
       LOGI(g_arOK ? "Arabic glyph atlases loaded (bank_ar, beck_ar): Arabic is available on the Language page" : "Arabic glyph atlases (bank_ar / beck_ar in %spc/fonts/) not found: Arabic is not offered", g_dirPC.c_str()); }
     g_texArrow = LoadPNG("pc/images/arrow.png");
     g_texBack  = LoadPNG("pc/images/" + g_cfgBackground);
-    g_texProgress = LoadPNG("pc/images/ProgressTex.png");          // PC style loading bar (1.2.0)
     for(int n = 2; n <= 5; ++n) { char pth[48]; snprintf(pth, sizeof(pth), "pc/images/back%d.png", n); g_texBg[n] = LoadPNG(pth); }
     if(!ok) LOGE("Font atlases are missing in %spc/fonts/ (bank.png/.txt, beck.png/.txt). Run tools/gen_fonts.py or copy the PCMenu folder again.", g_dirPC.c_str());
     if(!g_texArrow) LOGE("Cannot load %spc/images/arrow.png", g_dirPC.c_str());
@@ -2370,7 +2368,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.0%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.1%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     g_dirPC   = data + "PCMenu/";
     {
         std::string root = data;                                // strip ".../files/" -> ".../<package>/"

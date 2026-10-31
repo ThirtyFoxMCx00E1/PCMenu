@@ -1458,6 +1458,27 @@ int main()
         CHECK(PickNext(0) == 1 && PickNext((int)g_lsAvail.size() - 1) == 0);                          // sequential order wraps around
         g_cfgSplashRandom = true; for(int k = 0; k < 20; ++k) { int r = PickNext(3); CHECK(r != 3 && r >= 0 && r < (int)g_lsAvail.size()); } g_cfgSplashRandom = false;
         g_cfgSplashFirst = 5; g_cfgSplashLast = 2; ScanSplashes(); CHECK(g_lsAvail.size() == 4 && g_lsAvail[0] == 2); g_cfgSplashFirst = 0; g_cfgSplashLast = 27;
+        // loading screen geometry (PC mode on a 1600x720 phone = the PC screenshot: picture 1280x640 at 160,40)
+        { float kw = L.W, kh = L.H; L.W = 1600; L.H = 720; g_cfgSplashFit = 2;
+          PicRect r = SplashRect(NULL);
+          CHECK(fabsf(r.x0 - 160) < 2 && fabsf(r.y0 - 40) < 2 && fabsf(r.x1 - 1440) < 2 && fabsf(r.y1 - 680) < 2);
+          float bx0 = r.x0 + (r.x1 - r.x0) * 0.091f, bx1 = r.x0 + (r.x1 - r.x0) * 0.238f, by0 = r.y0 + (r.y1 - r.y0) * 0.897f;
+          CHECK(fabsf(bx0 - 276) < 4 && fabsf(bx1 - 465) < 4 && fabsf(by0 - 614) < 3);                                  // under the logo, bottom left (PC: 273, 613)
+          g_cfgSplashFit = 0; r = SplashRect(NULL); CHECK(r.x0 == 0 && r.x1 == 1600 && r.y0 < 0);     // Fill crops top / bottom
+          g_cfgSplashFit = 2; L.W = kw; L.H = kh; }
+        // pictures are prepared on the main thread (Init), never in the render hook
+        { static int dummy[16];
+          fnPngRead = [](const char*) -> void* { return dummy; };
+          fnFindRasterFmt = (decltype(fnFindRasterFmt))+[](void*, int, int* w, int* h, int* d, int* f) -> void* { *w = 1024; *h = 512; *d = 32; *f = 0; return NULL; };
+          fnRasterCreate = (decltype(fnRasterCreate))+[](int, int, int, int) -> void* { return dummy + 1; };
+          fnRasterFromImg = (decltype(fnRasterFromImg))+[](void*, void*) -> void* { return NULL; };
+          fnTexCreate = (decltype(fnTexCreate))+[](void*) -> void* { return dummy + 2; };
+          fnImgDestroy = (decltype(fnImgDestroy))+[](void*) -> int { return 0; };
+          g_cfgSplashPreload = 3; g_cfgSplashRandom = false; g_lsSeq = 0; PrepareSplashSet();
+          CHECK(g_lsSetN.load() == 3); int s1 = g_lsSeq; PrepareSplashSet(); CHECK(g_lsSetN.load() == 3 && g_lsSeq % (int)g_lsAvail.size() == (s1 + 3) % (int)g_lsAvail.size());   // the next loading screen continues the cycle
+          FreeSplashSet(); CHECK(g_lsSetN.load() == 0);
+          size_t before = g_lsAvail.size(); fnPngRead = fPng; PrepareSplashSet(); CHECK(g_lsSetN.load() == 0 && g_lsAvail.empty() && before > 0);   // unreadable pictures: stock screen, no crash
+          fnFindRasterFmt = NULL; fnRasterCreate = NULL; fnRasterFromImg = NULL; fnTexCreate = NULL; fnImgDestroy = NULL; }
         CHECK(!TransparentBackdrop());                                                               // the opaque build never draws the game frame
         // menu mappings the stock menu must not see while the PC menu owns the screen
         int keepKind = g_kind, keepView = g_view; int64_t keepLive = g_liveMs; bool keepIn = g_inStockUpdate;

@@ -3,7 +3,7 @@
  *   - Transparent variant (PCMENU_TRANSPARENT, libPCMenuT32/64.so): the blurred game frame behind the pause menu,
  *     the Android port of III.VC.SA.TransparentMenu (capture the frame buffer from CHud::Draw while no menu is up)
  *   - Controller support: CHID menu mappings drive the PC menu (up / down / left / right / accept / back)
- *   - Loading screen: mobilesc0..mobilesc27 splash cycle and a PC style progress bar (ProgressTex.png)
+ *   - Loading screen: mobilesc0..mobilesc27 splash cycle and a PC style progress bar (thin grey bar under the logo, as on PC)
  */
 #pragma once
 #include <link.h>
@@ -27,6 +27,8 @@ static float g_cfgSplashSec    = 5.0f;    // SplashSeconds
 static bool  g_cfgSplashRandom = false;   // Order=Random | Sequential
 static bool  g_cfgProgressBar  = true;    // ProgressBar=1
 static bool  g_cfgLoadMusic    = false;   // LoadingMusic=1: ldsc.mp3 while loading
+static int   g_cfgSplashPreload = 3;      // SplashPreload=1..8: pictures prepared (main thread) per loading screen
+static int   g_cfgSplashFit    = 2;       // SplashFit=Fill | Fit | PC (PC: the picture framed in black, as the PC game shows it)
 
 static void ExtraConfig(const std::string& k, const std::string& v)
 {
@@ -45,6 +47,8 @@ static void ExtraConfig(const std::string& k, const std::string& v)
     else if(k == "Order")              { std::string u = Upper(v); g_cfgSplashRandom = (u == "RANDOM" || u == "1"); }
     else if(k == "ProgressBar")        g_cfgProgressBar = i != 0;
     else if(k == "LoadingMusic")       g_cfgLoadMusic = i != 0;
+    else if(k == "SplashPreload")      g_cfgSplashPreload = std::min(8, std::max(1, i));
+    else if(k == "SplashFit")          { std::string u = Upper(v); g_cfgSplashFit = (u == "FILL" || u == "0") ? 0 : (u == "FIT" || u == "1") ? 1 : 2; }
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -361,14 +365,23 @@ static void ControllerNav()
 /* ------------------------------------------------------------------------------------------ */
 /*  Loading screen                                                                              */
 /* ------------------------------------------------------------------------------------------ */
+/* Threads: on Android the loading screen is drawn by the game's LOADING THREAD (CLoadingScreen::Init starts it, Shutdown stops it)
+   while the main thread keeps loading the world. RenderWare objects must therefore never be created or destroyed from the
+   RenderSplash hook: that raced the main thread's texture loading and froze the game at the end of a short loading screen
+   (New Game / Load). All pictures are loaded on the MAIN thread in the Init hook, before the loading thread starts, and the
+   render hook only draws what is ready. */
 static float*   g_pLsPercent = NULL;
 static uint8_t* g_pLsLegal = NULL;
-static bool     g_lsHook = false, g_lsBarHook = false, g_lsLogged = false;
-static int64_t  g_lsLastMs = -100000, g_lsStartMs = 0, g_lsSwitchMs = 0;
-static int      g_lsCur = -1, g_lsNext = -1;
-static void*    g_lsTexCur = NULL; static void* g_lsTexNext = NULL;
+static bool     g_lsHook = false, g_lsBarHook = false, g_lsInitHook = false, g_lsLogged = false;
+static std::atomic<int64_t> g_lsLastMs(-100000);
+static int64_t  g_lsStartMs = 0, g_lsSwitchMs = 0;
 static std::vector<int> g_lsAvail;                         // mobilesc numbers whose file exists
 static bool     g_lsScanned = false;
+static int      g_lsSeq = 0;                               // position in g_lsAvail of the next picture to load (sequential order across loading screens)
+static const int LS_MAXSET = 8;
+static void*    g_lsSet[LS_MAXSET];                        // pictures of the current loading screen (main thread fills them, loading thread draws them)
+static std::atomic<int> g_lsSetN(0);
+static int      g_lsShown = 0;                             // index into g_lsSet (loading thread only)
 
 static void ScanSplashes()
 {
@@ -384,45 +397,85 @@ static int PickNext(int cur)
     if(g_cfgSplashRandom) { int r; do { r = rand() % n; } while(r == cur); return r; }
     return (cur + 1) % n;
 }
-static void DrawAspectFill(void* tex, Col c)
+static void FreeSplashSet()                                 // main thread, loading thread not running
+{
+    int n = g_lsSetN.exchange(0);
+    for(int i = 0; i < n; ++i) { if(g_lsSet[i] && fnTexDestroy) fnTexDestroy(g_lsSet[i]); g_lsSet[i] = NULL; }
+}
+static void PrepareSplashSet()                              // main thread, before the loading thread starts
+{
+    FreeSplashSet();
+    if(!g_lsScanned) ScanSplashes();
+    int want = std::min(std::min(g_cfgSplashPreload, LS_MAXSET), (int)g_lsAvail.size()), n = 0, guard = 0;
+    if(g_cfgSplashRandom && !g_lsAvail.empty()) g_lsSeq = rand() % (int)g_lsAvail.size();
+    while(n < want && guard++ < 64 && !g_lsAvail.empty())
+    {
+        g_lsSeq %= (int)g_lsAvail.size();
+        int num = g_lsAvail[g_lsSeq];
+        void* t = LoadSplash(num);
+        if(!t) { g_lsAvail.erase(g_lsAvail.begin() + g_lsSeq); continue; }   // unreadable file: never tried again
+        g_lsSet[n++] = t;
+        g_lsSeq = g_cfgSplashRandom ? PickNext(g_lsSeq) : g_lsSeq + 1;
+    }
+    g_lsShown = 0;
+    g_lsSetN.store(n);
+}
+
+/* where the picture goes on screen; the bar is placed in picture coordinates, so it always sits under the logo */
+struct PicRect { float x0, y0, x1, y1, u0, v0, u1, v1; };
+static PicRect SplashRect(void* tex)
 {
     int tw = 1024, th = 512; RasterSize(TexRaster(tex), tw, th);
-    float sa = (float)tw / (float)th, da = L.W / L.H, u0 = 0, u1 = 1, v0 = 0, v1 = 1;
-    if(da > sa) { float k = sa / da; v0 = 0.5f - k * 0.5f; v1 = 0.5f + k * 0.5f; }   // screen wider: crop top / bottom
-    else        { float k = da / sa; u0 = 0.5f - k * 0.5f; u1 = 0.5f + k * 0.5f; }   // screen taller: crop the sides
-    DrawTex(tex, 0, 0, L.W, L.H, u0, v0, u1, v1, c);
+    float sa = (float)tw / (float)th, da = L.W / L.H;
+    PicRect r = { 0, 0, L.W, L.H, 0, 0, 1, 1 };
+    if(g_cfgSplashFit == 0)                                 // Fill: cover the screen, crop the rest
+    {
+        if(da > sa) { float h = L.W / sa; r.y0 = (L.H - h) * 0.5f; r.y1 = r.y0 + h; }
+        else        { float w = L.H * sa; r.x0 = (L.W - w) * 0.5f; r.x1 = r.x0 + w; }
+    }
+    else
+    {
+        float k = (g_cfgSplashFit == 2) ? 0.889f : 1.0f;    // PC: the picture framed in black, as the PC game shows it
+        float h = L.H * k, w = h * sa;
+        if(w > L.W * k) { w = L.W * k; h = w / sa; }
+        r.x0 = (L.W - w) * 0.5f; r.y0 = (L.H - h) * 0.5f; r.x1 = r.x0 + w; r.y1 = r.y0 + h;
+    }
+    return r;
+}
+static void DrawSplash(void* tex, const PicRect& r, uint8_t a)
+{
+    // (Fill) the parts outside the screen are cut by the UV range, so nothing is drawn off screen
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1, x0 = r.x0, y0 = r.y0, x1 = r.x1, y1 = r.y1;
+    if(x0 < 0) { u0 = -x0 / (r.x1 - r.x0); u1 = 1 - u0; x0 = 0; x1 = L.W; }
+    if(y0 < 0) { v0 = -y0 / (r.y1 - r.y0); v1 = 1 - v0; y0 = 0; y1 = L.H; }
+    DrawTex(tex, x0, y0, x1, y1, u0, v0, u1, v1, Col{ 255, 255, 255, a });
 }
 static float LoadPercent()
 {
     float p = 0; if(g_pLsPercent) SafeCopy(g_pLsPercent, &p, sizeof(p));
     return p != p ? 0.0f : std::min(100.0f, std::max(0.0f, p));
 }
-static void DrawProgressBar()
+/* PC loading bar (taken from the PC game): a thin bar right under the "San Andreas" logo, black outline, grey fill,
+   the empty part at half brightness. No text, no background strip. Measured on the PC screenshot: picture x 8.8%..23.8%
+   (here matched to the mobilesc logo: 7.5%..36.5%), top at 91.4% of the picture height, 1.9% high. */
+static void DrawProgressBar(const PicRect& r, uint8_t a)
 {
     float frac = LoadPercent() / 100.0f;
-    float bw = 0.50f * L.W, bh = bw * (256.0f / 1024.0f), bx = (L.W - bw) * 0.5f, by = 0.86f * L.H - bh * 0.5f;
-    FillRect(0, 0.80f * L.H, L.W, 0.95f * L.H, Col{ 0, 0, 0, 150 });
-    if(g_texProgress)
-    {   // ProgressTex.png (1024x256): frame x35..990 / y110..146, white interior x51..974 / y118..138
-        DrawTex(g_texProgress, bx, by, bx + bw, by + bh, 0, 0, 1, 1, TH_BLUE.dim);
-        float iu0 = 51.0f / 1024.0f, iu1 = 974.0f / 1024.0f, iv0 = 118.0f / 256.0f, iv1 = 138.0f / 256.0f;
-        float fu1 = iu0 + (iu1 - iu0) * frac;
-        if(frac > 0.001f) DrawTex(g_texProgress, bx + bw * iu0, by + bh * iv0, bx + bw * fu1, by + bh * iv1, iu0, iv0, fu1, iv1, TH_BLUE.sel);
+    float pw = r.x1 - r.x0, ph = r.y1 - r.y0;
+    float x0 = r.x0 + pw * 0.091f, x1 = r.x0 + pw * 0.238f;     // measured on the PC game: just under "San Andreas"
+    float y0 = r.y0 + ph * 0.897f, y1 = y0 + std::max(6.0f, ph * 0.0165f);
+    if(y1 > L.H - 2) { float d = y1 - (L.H - 2); y0 -= d; y1 -= d; }   // (Fill on a tall screen) keep it on screen
+    float b = std::max(1.0f, (y1 - y0) / 5.0f);                         // outline
+    FillRect(x0, y0, x1, y1, Col{ 0, 0, 0, a });
+    float ix0 = x0 + b, ix1 = x1 - b, iy0 = y0 + b, iy1 = y1 - b, fx = ix0 + (ix1 - ix0) * frac;
+    float m = (iy0 + iy1) * 0.5f;
+    if(fx > ix0)
+    {   // fill with the soft vertical shading of the PC bar (90 at the edges, 106 in the middle)
+        FillRect(ix0, iy0, fx, m, Col{ 96, 96, 98, a });
+        FillRect(ix0, m, fx, iy1, Col{ 104, 103, 106, a });
+        FillRect(ix0, iy0, fx, iy0 + b * 0.6f, Col{ 86, 86, 88, a });
     }
-    else
-    {
-        float h = 0.018f * L.H, y0 = 0.86f * L.H - h * 0.5f;
-        FillRect(bx, y0, bx + bw, y0 + h, Col{ 40, 50, 60, 220 });
-        FillRect(bx + 2, y0 + 2, bx + 2 + (bw - 4) * frac, y0 + h - 2, TH_BLUE.sel);
-    }
-    if(g_resOK)
-    {
-        float hs = (0.024f * L.H) / (float)g_bank.capH, base = by + bh * (110.0f / 256.0f) - 0.012f * L.H;
-        std::string t = Tr("LOADING"); char pc[16]; snprintf(pc, sizeof(pc), "%d%%", (int)(frac * 100.0f + 0.5f));
-        DrawText(g_bank, t, bx + bw * (35.0f / 1024.0f), base, hs, L.track, TH_BLUE.title);
-        float pw = g_bank.Width(pc, hs, L.track);
-        DrawText(g_bank, pc, bx + bw * (990.0f / 1024.0f) - pw, base, hs, L.track, TH_BLUE.title);
-    }
+    if(fx < ix1) FillRect(fx, iy0, ix1, iy1, Col{ 48, 48, 49, a });
 }
 
 /* ---- loading music (ldsc.mp3 through an OpenSL URI/FD player; stopped by a watcher when the loading screen is gone) ---- */
@@ -439,7 +492,7 @@ static void MusicStop()
 }
 static void* MusicWatch(void*)
 {
-    while(g_musOn) { usleep(100000); if(NowMs() - g_lsLastMs > 700) { MusicStop(); LOGI("Loading music stopped"); } }
+    while(g_musOn) { usleep(100000); if(NowMs() - g_lsLastMs.load() > 1500 && NowMs() - g_lsStartMs > 3000) { MusicStop(); LOGI("Loading music stopped"); } }
     return NULL;
 }
 static void MusicStart()
@@ -465,58 +518,53 @@ static void MusicStart()
 }
 
 static bool LegalScreen() { uint8_t b = 0; if(g_pLsLegal) SafeCopy(g_pLsLegal, &b, 1); return b != 0; }
-static bool OwnLoadingScreen() { return g_cfgLoadScreen && !LegalScreen(); }
 
-DECL_HOOKv(LS_RenderSplash, void)
+/* main thread: the loading screen is about to start */
+DECL_HOOKv(LS_Init, bool legal, bool dontReload)
 {
-    if(!OwnLoadingScreen()) { LS_RenderSplash(); return; }
-    if(!g_resTried) LoadResources();
-    if(!g_lsScanned) ScanSplashes();
-    int64_t now = NowMs();
-    if(now - g_lsLastMs > 1500)                            // a new loading screen: start from the first (or a random) picture, fade in from black
+    if(g_cfgLoadScreen && !legal && NowMs() - g_lsLastMs.load() > 500)   // (never while a loading thread may still draw the current set)
     {
-        g_lsStartMs = now; g_lsSwitchMs = now;
-        if(g_lsTexCur && fnTexDestroy) fnTexDestroy(g_lsTexCur);
-        if(g_lsTexNext && fnTexDestroy) fnTexDestroy(g_lsTexNext);
-        g_lsTexCur = g_lsTexNext = NULL; g_lsNext = -1;
-        g_lsCur = g_lsAvail.empty() ? -1 : (g_cfgSplashRandom ? rand() % (int)g_lsAvail.size() : 0);
-        if(g_lsCur >= 0) g_lsTexCur = LoadSplash(g_lsAvail[g_lsCur]);
-        if(!g_lsLogged) { g_lsLogged = true; LOGI("PC loading screen is running (%s order, %.1f s per picture)", g_cfgSplashRandom ? "random" : "sequential", g_cfgSplashSec); }
+        int64_t t0 = NowMs();
+        PrepareSplashSet();
+        g_lsStartMs = 0;                                    // the render hook restarts its fade / timer
+        g_lsLastMs.store(-100000);
+        if(!g_lsLogged) { g_lsLogged = true; LOGI("PC loading screen: %d picture(s) prepared on the main thread in %d ms (%s order, %.1f s each)", g_lsSetN.load(), (int)(NowMs() - t0), g_cfgSplashRandom ? "random" : "sequential", g_cfgSplashSec); }
         MusicStart();
     }
-    g_lsLastMs = now;
-    if(g_lsCur < 0 || !g_lsTexCur) { LS_RenderSplash(); if(g_cfgProgressBar) { ComputeLayout(); SetStates(); DrawProgressBar(); } return; }
+    LS_Init(legal, dontReload);
+}
 
+/* loading thread: draw only (no RenderWare object is created or destroyed here) */
+DECL_HOOKv(LS_RenderSplash, void)
+{
+    int n = g_lsSetN.load();
+    if(!g_cfgLoadScreen || LegalScreen() || n <= 0) { LS_RenderSplash(); return; }   // nothing prepared: the stock picture (and the stock bar)
+    int64_t now = NowMs();
+    if(g_lsStartMs == 0 || now - g_lsLastMs.load() > 1500) { g_lsStartMs = now; g_lsSwitchMs = now; g_lsShown = 0; }
+    g_lsLastMs.store(now);
     ComputeLayout(); SetStates();
     const float fadeMs = 600.0f, holdMs = g_cfgSplashSec * 1000.0f;
     float t = (float)(now - g_lsSwitchMs);
-    if(g_lsNext < 0 && g_lsAvail.size() > 1 && t > holdMs - fadeMs - 400.0f)       // preload the next picture a little before the crossfade
-    {
-        g_lsNext = PickNext(g_lsCur);
-        g_lsTexNext = LoadSplash(g_lsAvail[g_lsNext]);
-        if(!g_lsTexNext) { g_lsAvail.erase(g_lsAvail.begin() + g_lsNext); if(g_lsNext < g_lsCur) --g_lsCur; g_lsNext = -1; }
-    }
-    if(g_lsNext >= 0 && g_lsTexNext && t >= holdMs)
-    {
-        if(fnTexDestroy) fnTexDestroy(g_lsTexCur);
-        g_lsTexCur = g_lsTexNext; g_lsTexNext = NULL; g_lsCur = g_lsNext; g_lsNext = -1;
-        g_lsSwitchMs = now; t = 0;
-    }
+    if(n > 1 && t >= holdMs) { g_lsShown = (g_lsShown + 1) % n; g_lsSwitchMs = now; t = 0; }
+    void* cur = g_lsSet[g_lsShown % n];
+    void* nxt = n > 1 ? g_lsSet[(g_lsShown + 1) % n] : NULL;
     FillRect(0, 0, L.W, L.H, COL_BLACK);
     float fin = std::min(1.0f, (float)(now - g_lsStartMs) / fadeMs);
-    DrawAspectFill(g_lsTexCur, Col{ 255, 255, 255, (uint8_t)(255.0f * fin) });
-    if(g_lsTexNext && t > holdMs - fadeMs)
+    uint8_t ai = (uint8_t)(255.0f * fin);
+    PicRect r = SplashRect(cur);
+    DrawSplash(cur, r, ai);
+    if(nxt && t > holdMs - fadeMs)
     {
         float k = std::min(1.0f, (t - (holdMs - fadeMs)) / fadeMs);
-        DrawAspectFill(g_lsTexNext, Col{ 255, 255, 255, (uint8_t)(255.0f * k) });
+        DrawSplash(nxt, SplashRect(nxt), (uint8_t)(255.0f * k));
     }
-    if(g_cfgProgressBar) DrawProgressBar();
+    if(g_cfgProgressBar) DrawProgressBar(r, ai);
     fnRenderState(RS_ZTEST, (void*)1);
     fnRenderState(RS_ZWRITE, (void*)1);
 }
 DECL_HOOKv(LS_RenderLoadingBar, void)
 {
-    if(g_cfgLoadScreen && g_cfgProgressBar && !LegalScreen() && g_lsHook) return;    // our bar is drawn with the splash
+    if(g_cfgLoadScreen && g_cfgProgressBar && !LegalScreen() && g_lsSetN.load() > 0) return;   // our bar is drawn with the splash
     LS_RenderLoadingBar();
 }
 
@@ -571,10 +619,15 @@ static void InstallExtras()
         g_pLsLegal   = (uint8_t*)aml->GetSym(g_hGame, "_ZN14CLoadingScreen14m_bLegalScreenE");
         if(!g_pLsPercent) { uintptr_t p = 0; if(SafeCopy((void*)(g_libBase + BYBIT(0x677FA8, 0x84DF70)), &p, sizeof(p)) && p) g_pLsPercent = (float*)p; }
         if(!g_pLsLegal)   { uintptr_t p = 0; if(SafeCopy((void*)(g_libBase + BYBIT(0x67611C, 0x84A298)), &p, sizeof(p)) && p) g_pLsLegal = (uint8_t*)p; }
-        g_lsHook = HookAny("CLoadingScreen::RenderSplash", "_ZN14CLoadingScreen12RenderSplashEv", (void*)&HookOf_LS_RenderSplash, (void**)&LS_RenderSplash);
-        if(g_lsHook && g_cfgProgressBar)
-            g_lsBarHook = HookAny("CLoadingScreen::RenderLoadingBar", "_ZN14CLoadingScreen16RenderLoadingBarEv", (void*)&HookOf_LS_RenderLoadingBar, (void**)&LS_RenderLoadingBar);
-        LOGI("Loading screen: percent %p legal %p, splash hook %d, bar hook %d", (void*)g_pLsPercent, (void*)g_pLsLegal, (int)g_lsHook, (int)g_lsBarHook);
+        g_lsInitHook = HookAny("CLoadingScreen::Init", "_ZN14CLoadingScreen4InitEbb", (void*)&HookOf_LS_Init, (void**)&LS_Init);
+        if(g_lsInitHook)                                    // without Init (main thread) nothing can be prepared safely: the stock loading screen stays
+        {
+            g_lsHook = HookAny("CLoadingScreen::RenderSplash", "_ZN14CLoadingScreen12RenderSplashEv", (void*)&HookOf_LS_RenderSplash, (void**)&LS_RenderSplash);
+            if(g_lsHook && g_cfgProgressBar)
+                g_lsBarHook = HookAny("CLoadingScreen::RenderLoadingBar", "_ZN14CLoadingScreen16RenderLoadingBarEv", (void*)&HookOf_LS_RenderLoadingBar, (void**)&LS_RenderLoadingBar);
+        }
+        else LOGI("PC loading screen off: CLoadingScreen::Init could not be hooked (pictures must be loaded on the main thread)");
+        LOGI("Loading screen: percent %p legal %p, init hook %d, splash hook %d, bar hook %d", (void*)g_pLsPercent, (void*)g_pLsLegal, (int)g_lsInitHook, (int)g_lsHook, (int)g_lsBarHook);
     }
     else LOGI("PC loading screen switched off (LoadingScreen=0)");
 }
