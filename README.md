@@ -33,6 +33,8 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
   with a crossfade, plus the PC style progress bar: a thin grey bar with a black outline just under the "San Andreas" logo (no text, no background strip).
   The picture is framed like the PC game (`SplashFit=PC`; `Fit` / `Fill` also available). All pictures are prepared on the
   main thread before loading starts (`SplashPreload`, default 3); the loading thread only draws, which fixes the freeze after New Game / Load Game.
+  The title "Grand Theft Auto San Andreas" in the pictures is at the PC position and size (bottom left, right above the bar);
+  the pictures were made with `source/tools/pc_title.py` from the untouched mobile ones in `source/tools/lds_original/`.
   Options: `LoadingScreen`, `SplashFirst`, `SplashLast`, `SplashSeconds`, `Order`, `ProgressBar`, `LoadingMusic`.
 
 ## Build

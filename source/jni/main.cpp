@@ -41,9 +41,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.1, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.2, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.1, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.2, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -2368,7 +2368,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.1%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.2%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     g_dirPC   = data + "PCMenu/";
     {
         std::string root = data;                                // strip ".../files/" -> ".../<package>/"
