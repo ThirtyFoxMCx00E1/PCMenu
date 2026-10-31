@@ -18,5 +18,6 @@ public:
     void* GetLibHandle(const char*) { return 0; }
     std::string GetAndroidDataPath() { return ""; }
     bool HookPLT(void*, void*, void**) { return true; }
+    bool Hook(void*, void*, void**) { return true; }
 };
 static IAML g_amlStub; static IAML* aml = &g_amlStub;

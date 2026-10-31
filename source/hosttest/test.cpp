@@ -757,7 +757,9 @@ int main()
         CHECK(Labels() == "LANJUTKAN|MULAI PERMAINAN BARU|PETA|STATISTIK|RINGKASAN|PENGATURAN|KELUAR PERMAINAN"); Shot("13_id_pause");
         CHECK(TitleOf("MAIN MENU") == "Menu Utama" && TitleOf("PAUSE MENU") == "Menu Jeda" && TitleOf("LOAD GAME") == "Muat Permainan" && TitleOf("MODS") == "Mod" && OptionsTitle() == "Pengaturan");
         CHECK(Tr("BACK") == "KEMBALI" && Tr("PLEASE WAIT") == "HARAP TUNGGU" && Tr("NO MODS FOUND") == "TIDAK ADA MOD DITEMUKAN" && Tr("NOTHING TO SHOW HERE") == "TIDAK ADA YANG DITAMPILKAN");
-        CHECK(Tr("SOMETHING NOT IN THE TABLE") == "SOMETHING NOT IN THE TABLE");
+        CHECK(Tr("ZYXQ WVUT") == "ZYXQ WVUT");                                                                  // nothing known: English
+        CHECK(Tr("SOMETHING NOT IN THE TABLE") == "SOMETHING NOT DI THE TABLE");                               // v1.2.0: known words are translated by themselves
+        CHECK(Tr("CONTROLLER SUPPORT") == "DUKUNGAN KONTROLER" && Tr("ENABLE LOADING SCREEN") == "AKTIFKAN LAYAR MEMUAT");
         *(uint8_t*)(rootScr + OFF_SCR_ISPAUSE) = 0; Idle(3); CHECK(Labels() == "LANJUTKAN|MULAI PERMAINAN|PENGATURAN|KELUAR PERMAINAN"); *(uint8_t*)(rootScr + OFF_SCR_ISPAUSE) = 1; Idle(3);
         ComputeLayout(); Tap(L.cx, rootY(5)); CHECK(g_kind == SK_OPTIONS && g_optRows.size() == 6);
         CHECK(g_optRows[0].title == "Permainan" && g_optRows[1].title == "Tampilan" && g_optRows[2].title == "Audio" && g_optRows[3].title == "Pengaturan Mod");
@@ -768,8 +770,14 @@ int main()
         CHECK(g_pageRows[2].valText == "MATI"); Shot("15_id_display"); Tap(L.pLabelX + 60, PageRowCY(2)); Idle(2); CHECK(g_pageRows[2].valText == "NYALA");
         WriteSetting(3, 0);
         CHECK(Resolve("FESZ_QL") == "APAKAH ANDA YAKIN INGIN MEMUAT PERMAINAN INI?" && Resolve("FESZ_QL", false) == "Are you sure you want to load this game?");
-        CHECK(Resolve("FEM_YES") == "YA" && Resolve("FEM_NO") == "TIDAK" && Resolve("Unknown Mod Text") == "Unknown Mod Text");
+        CHECK(Resolve("FEM_YES") == "YA" && Resolve("FEM_NO") == "TIDAK" && Resolve("Zyxq Wvut") == "Zyxq Wvut");
+        CHECK(Resolve("Enable Blur Background") == "AKTIFKAN BURAM LATAR BELAKANG" && Resolve("Hitmarker Size") == "UKURAN PENANDA HIT");
         CHECK(PhraseFor(LG_ID, "AUTOSAVE: EMPTY SLOT") == "SIMPAN OTOMATIS: SLOT KOSONG" && PhraseFor(LG_ID, "Brightness") == "KECERAHAN" && PhraseFor(LG_ID, "nothing known here").empty());
+        CHECK(PhraseFor(LG_FR, "Enable Hitmarker") == "ACTIVER MARQUEUR D'IMPACT" && PhraseFor(LG_DE, "Music Volume") == "MUSIKLAUTSTARKE" && PhraseFor(LG_DE, "Shadow Volume") == "SCHATTEN-LAUTSTARKE");
+        CHECK(PhraseFor(LG_ES, "Controller Deadzone") == "MANDO ZONA MUERTA" && PhraseFor(LG_IT, "Loading Screen") == "SCHERMATA DI CARICAMENTO" && PhraseFor(LG_FR, "Zyxq").empty());
+        { std::string d = g_dirPC + "lang/"; mkdir(d.c_str(), 0755); { FILE* wf = fopen((d + "fr.txt").c_str(), "wb"); fputs("# test\nLoading Screen = \xC3\x89" "cran personnalis\xC3\xA9\nZyxq=Bonjour\n", wf); fclose(wf); } g_userDictLoaded[0] = false; g_userDictCount[0] = 0; g_userDict[0].clear();
+          CHECK(PhraseFor(LG_FR, "LOADING SCREEN") == "ECRAN PERSONNALISE" && PhraseFor(LG_FR, "Zyxq!") == "BONJOUR!" && PhraseFor(LG_FR, "Zyxq Mode") == "MODE BONJOUR");
+          unlink((d + "fr.txt").c_str()); g_userDictLoaded[0] = false; g_userDictCount[0] = 0; g_userDict[0].clear(); }
         // save slots and the Start Game tiles
         Reset(); Tap(L.cx, rootY(1)); ComputeLayout(); CHECK(g_kind == SK_START && g_optRows.size() == 3 && g_optRows[0].label == "PERMAINAN BARU" && g_optRows[1].label == "MUAT PERMAINAN" && g_optRows[2].label == "HAPUS PERMAINAN");
         Tap(L.sLabelX + 60, PageRowCY(1)); Idle(3);
@@ -972,7 +980,7 @@ int main()
         // toggle value, ACTIVE row text, dialog text
         Tap(L.W - L.pLabelX - 60, PageRowCY(2)); Idle(2); CHECK(g_pageRows[2].valText == "تشغيل"); WriteSetting(3, 0);
         CHECK(Resolve("FESZ_QL") == "هل أنت متأكد أنك تريد تحميل هذه اللعبة؟" && Resolve("FESZ_QL", false) == "Are you sure you want to load this game?");
-        CHECK(Resolve("FEM_YES") == "نعم" && Resolve("FEM_NO") == "لا" && Resolve("Unknown Mod Text") == "Unknown Mod Text");
+        CHECK(Resolve("FEM_YES") == "نعم" && Resolve("FEM_NO") == "لا" && Resolve("Zyxq Wvut") == "Zyxq Wvut");
         CHECK(PhraseFor(LG_AR, "AUTOSAVE: EMPTY SLOT") == "حفظ تلقائي: خانة فارغة" && PhraseFor(LG_AR, "Brightness") == "السطوع" && PhraseFor(LG_AR, "nothing known here").empty());
         CHECK(PhraseFor(LG_AR, "Are you sure?") == "هل أنت متأكد؟" && PhraseFor(LG_ID, "Are you sure?") == "APAKAH ANDA YAKIN?");
         // save slots, Start Game tiles (left aligned in the left-to-right layout: right aligned now) and the confirm dialog
@@ -1414,7 +1422,8 @@ int main()
           CHECK(Resolve("FEH_LOA", true, &dr) == "PERMAINAN" && dr);                                       // curated wording wins over the file's "Opsi Permainan"
           CHECK(Resolve("FEX_UNK", true, &dr) == "Frobnikasi" && dr);                                      // no table wording: the file's text
           CHECK(Resolve("FEX_UNK", false, &dr) == "Frobnicate");                                           // localize = false: the game's own text
-          CHECK(Resolve("SOME PLAIN MOD TEXT", true, &dr) == "SOME PLAIN MOD TEXT" && dr);                 // a mod's own text is not a key
+          CHECK(Resolve("SOME PLAIN MOD TEXT", true, &dr) == "SOME PLAIN MOD TEKS" && dr);                 // a mod's own text is not a key (known words translated)
+          CHECK(Resolve("ZYXQ PLAIN", true, &dr) == "ZYXQ PLAIN" && dr);
           gameLang = 5; fakeFront[OFF_FE_LANGUAGE] = 5;                                                    // Russian game: the font cannot draw its text
           CHECK(Resolve("FEX_UNK", true, &dr) == "Frobnikasi" && dr);                                      // ... the Indonesian file can
           CHECK(Resolve("FEH_LOA", true, &dr) == "PERMAINAN" && dr);
@@ -1435,6 +1444,30 @@ int main()
         ResetId(); g_cfgLang = 0; gameLang = 0; fakeFront[OFF_FE_LANGUAGE] = 0; gxtMissing[0] = '?'; TextGet_orig = NULL; fnMissionName = NULL; g_dirPC = keepDir;
     }
 #endif
+
+    // ---- 1.2.0: extra config keys, splash scan, controller row movement
+    {
+        ExtraConfig("Controller", "0"); CHECK(!g_cfgController); ExtraConfig("Controller", "1"); CHECK(g_cfgController);
+        ExtraConfig("TransparentDim", "999"); CHECK(g_cfgTrDim == 255); ExtraConfig("TransparentDim", "150");
+        ExtraConfig("CaptureInterval", "0"); CHECK(g_cfgTrInterval == 1); ExtraConfig("CaptureInterval", "2");
+        ExtraConfig("SplashSeconds", "0.1"); CHECK(g_cfgSplashSec == 5.0f); ExtraConfig("SplashSeconds", "7"); CHECK(g_cfgSplashSec == 7.0f); ExtraConfig("SplashSeconds", "5");
+        ExtraConfig("Order", "Random"); CHECK(g_cfgSplashRandom); ExtraConfig("Order", "Sequential"); CHECK(!g_cfgSplashRandom);
+        g_cfgSplashFirst = 0; g_cfgSplashLast = 27; ScanSplashes();
+        CHECK(g_lsAvail.size() >= 24 && g_lsAvail.front() == 0);                                     // mobilesc0..23 ship; 24..27 are used when added
+        for(size_t i = 0; i + 1 < g_lsAvail.size(); ++i) CHECK(g_lsAvail[i] < g_lsAvail[i + 1]);
+        CHECK(PickNext(0) == 1 && PickNext((int)g_lsAvail.size() - 1) == 0);                          // sequential order wraps around
+        g_cfgSplashRandom = true; for(int k = 0; k < 20; ++k) { int r = PickNext(3); CHECK(r != 3 && r >= 0 && r < (int)g_lsAvail.size()); } g_cfgSplashRandom = false;
+        g_cfgSplashFirst = 5; g_cfgSplashLast = 2; ScanSplashes(); CHECK(g_lsAvail.size() == 4 && g_lsAvail[0] == 2); g_cfgSplashFirst = 0; g_cfgSplashLast = 27;
+        CHECK(!TransparentBackdrop());                                                               // the opaque build never draws the game frame
+        // menu mappings the stock menu must not see while the PC menu owns the screen
+        int keepKind = g_kind, keepView = g_view; int64_t keepLive = g_liveMs; bool keepIn = g_inStockUpdate;
+        g_kind = SK_PAGE; g_liveMs = NowMs(); g_inStockUpdate = true;
+        CHECK(Blind(HM_DOWN) && Blind(HM_MACCEPT) && Blind(HM_MBACK) && !Blind(0x01));
+        g_kind = SK_ROOT; g_view = VIEW_MAIN; CHECK(!Blind(HM_MBACK) && Blind(HM_UP));                // root: the stock Back (resume) stays
+        g_view = VIEW_MAP; CHECK(!Blind(HM_UP));                                                      // the stock map reads the pad itself
+        g_inStockUpdate = false; g_view = VIEW_MAIN; CHECK(!Blind(HM_UP));
+        g_kind = keepKind; g_view = keepView; g_liveMs = keepLive; g_inStockUpdate = keepIn;
+    }
 
     printf("\n%d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;

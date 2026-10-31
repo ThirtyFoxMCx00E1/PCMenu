@@ -14,6 +14,11 @@
 #ifndef PCLANG_H
 #define PCLANG_H
 
+#include <map>
+#include <set>
+#include <unordered_map>
+#include "pcdict.h"
+
 enum { LG_EN = 0, LG_FR, LG_DE, LG_IT, LG_ES, LG_RU, LG_JA, LG_ID = 100, LG_AR = 101 };
 
 static uint8_t* g_pFrontEnd = NULL;                 // FrontEndMenuManager (CMenuManager)
@@ -208,8 +213,93 @@ static const char* KeyLookup(const KeyEn* t, size_t n, const char* key)
 static const char* KeyEnglish(const char* key) { return KeyLookup(kKeyEn, sizeof(kKeyEn) / sizeof(kKeyEn[0]), key); }
 static const char* KeyEnglishSoft(const char* key) { return KeyLookup(kKeySoft, sizeof(kKeySoft) / sizeof(kKeySoft[0]), key); }
 
+/* ================================================================================================================
+   Translation engine (v1.2.0): ONE lookup for every PC menu language (French, German, Italian, Spanish, Indonesian, Arabic).
+   Any text the PC menu shows in English - its own labels (Tr), mod option rows that come as plain English text, new options
+   added later - goes through PhraseFor(), so a new option is translated automatically:
+     1. PCMenu/lang/<code>.txt  (user file, ENGLISH=TRANSLATION per line, wins over everything; fr de it es id ar)
+     2. the whole phrase in the built-in tables (kTx, kDict from tools/pcdict.txt, kIdPhrases)
+     3. a pattern around a known word ("ENABLE X", "X VOLUME", ...) with X translated again
+     4. known parts of a save slot name (Indonesian / Arabic)
+     5. word by word (longest known run of words first); words nobody knows (mod names, numbers) stay as they are
+   Texts with no known word at all stay English and are written once to PCMenu/lang_missing.txt (LangMissingLog=0 turns it off),
+   ready to be copied into lang/<code>.txt.
+   ================================================================================================================ */
+static int LangCol(int lg) { return lg == LG_FR ? 0 : lg == LG_DE ? 1 : lg == LG_IT ? 2 : lg == LG_ES ? 3 : lg == LG_ID ? 4 : lg == LG_AR ? 5 : -1; }
+static const char* LangCode(int lg) { static const char* c[6] = { "fr", "de", "it", "es", "id", "ar" }; int k = LangCol(lg); return k < 0 ? "en" : c[k]; }
+static const char* TxCol(const Tx& t, int lg) { switch(LangCol(lg)) { case 0: return t.fr; case 1: return t.de; case 2: return t.it; case 3: return t.es; case 4: return t.id; case 5: return t.ar; } return NULL; }
+static const char* DictCol(const DictEntry& d, int lg) { switch(LangCol(lg)) { case 0: return d.fr; case 1: return d.de; case 2: return d.it; case 3: return d.es; case 4: return d.id; case 5: return d.ar; } return NULL; }
+
+static bool g_cfgLangLog = true;                     // LangMissingLog= in pcmenu.ini
+static std::map<std::string, std::string> g_userDict[6];
+static bool g_userDictLoaded[6] = { false, false, false, false, false, false };
+static int  g_userDictCount[6] = { 0, 0, 0, 0, 0, 0 };
+
+/* UTF-8 Latin letters with accents -> plain ASCII (the PC fonts only have ASCII): "Paramètres" -> "Parametres" */
+static std::string FoldLatinUtf8(const std::string& s)
+{
+    static const char* m40 = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";   // U+00C0..U+00FF
+    std::string r;
+    for(size_t i = 0; i < s.size(); ++i)
+    {
+        unsigned char c = (unsigned char)s[i];
+        if(c == 0xC3 && i + 1 < s.size()) { unsigned char d = (unsigned char)s[i + 1]; if(d >= 0x80 && d <= 0xBF) { unsigned cp = 0xC0 + (d - 0x80); if(cp == 0xC6) r += "AE"; else if(cp == 0xDF) r += "SS"; else if(cp == 0xE6) r += "ae"; else r += m40[cp - 0xC0]; ++i; continue; } }
+        if(c == 0xC5 && i + 1 < s.size()) { unsigned char d = (unsigned char)s[i + 1]; if(d == 0x92 || d == 0x93) { r += d == 0x92 ? "OE" : "oe"; ++i; continue; } }
+        if(c == 0xE2 && i + 2 < s.size() && (unsigned char)s[i + 1] == 0x80 && ((unsigned char)s[i + 2] == 0x99 || (unsigned char)s[i + 2] == 0x98)) { r += '\''; i += 2; continue; }
+        if(c >= 0x80) continue;                                // anything else the font cannot draw is dropped
+        r += (char)c;
+    }
+    return r;
+}
+static std::string NormPhrase(const std::string& s, std::string* tail = NULL);
+static void LoadUserDict(int col)
+{
+    if(col < 0 || col > 5 || g_userDictLoaded[col]) return;
+    g_userDictLoaded[col] = true;
+    static const char* codes[6] = { "fr", "de", "it", "es", "id", "ar" };
+    std::string path = g_dirPC + "lang/" + codes[col] + ".txt";
+    FILE* f = fopen(path.c_str(), "rb"); if(!f) return;
+    std::string txt; char buf[1024]; size_t n; while((n = fread(buf, 1, sizeof(buf), f)) > 0) txt.append(buf, n); fclose(f);
+    if(txt.size() >= 3 && (unsigned char)txt[0] == 0xEF && (unsigned char)txt[1] == 0xBB && (unsigned char)txt[2] == 0xBF) txt.erase(0, 3);
+    size_t pos = 0;
+    while(pos < txt.size())
+    {
+        size_t e = txt.find('\n', pos); if(e == std::string::npos) e = txt.size();
+        std::string line = txt.substr(pos, e - pos); pos = e + 1;
+        while(!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        size_t b = line.find_first_not_of(" \t"); if(b == std::string::npos) continue; line.erase(0, b);
+        if(line[0] == '#' || line[0] == ';') continue;
+        size_t eq = line.find('='); if(eq == std::string::npos || eq == 0) continue;
+        std::string k = NormPhrase(line.substr(0, eq)), v = line.substr(eq + 1);
+        while(!v.empty() && (v[0] == ' ' || v[0] == '\t')) v.erase(0, 1);
+        if(col != 5) v = Upper(FoldLatinUtf8(v));          // Latin languages / Indonesian: ASCII upper case like the tables
+        if(k.empty() || v.empty()) continue;
+        g_userDict[col][k] = v; ++g_userDictCount[col];
+    }
+}
+static std::set<std::string> g_missSeen; static bool g_missInit = false;
+static void NoteUntranslated(int lg, const std::string& n)
+{
+    if(!g_cfgLangLog || g_dirPC.empty()) return;
+    int letters = 0; for(size_t i = 0; i < n.size(); ++i) if(n[i] >= 'A' && n[i] <= 'Z') ++letters;
+    if(letters < 2) return;                                                  // numbers, "50%", single letters
+    if(n.find('_') != std::string::npos && n.find(' ') == std::string::npos) return;   // a GXT key the game does not have ("MOB_SFX"), not a text
+    std::string line = std::string(LangCode(lg)) + ": " + n + "=";
+    std::string path = g_dirPC + "lang_missing.txt";
+    if(!g_missInit)
+    {
+        g_missInit = true;
+        FILE* f = fopen(path.c_str(), "rb");
+        if(f) { char b[512]; while(fgets(b, sizeof(b), f)) { std::string l = b; while(!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back(); g_missSeen.insert(l); } fclose(f); }
+    }
+    if(g_missSeen.size() > 2000 || !g_missSeen.insert(line).second) return;
+    FILE* f = fopen(path.c_str(), "ab"); if(!f) return;
+    if(ftell(f) == 0) fputs("# PCMenu: texts that had no translation (language: ENGLISH=). Copy a line without the \"xx: \" prefix into PCMenu/lang/xx.txt and write the translation after '='.\n", f);
+    fputs((line + "\n").c_str(), f); fclose(f);
+}
+
 /* upper case, single spaces, no trailing punctuation: the form phrases are compared in */
-static std::string NormPhrase(const std::string& s, std::string* tail = NULL)
+static std::string NormPhrase(const std::string& s, std::string* tail)
 {
     std::string r; bool sp = false;
     for(size_t i = 0; i < s.size(); ++i)
@@ -226,72 +316,128 @@ static std::string NormPhrase(const std::string& s, std::string* tail = NULL)
     return r;
 }
 
-/* PC menu fixed phrase (English upper-case key) in the PC menu language. English, Russian and Japanese stay English (the font has no glyphs for the latter two). */
-static std::string Tr(const char* en)
-{
-    int lg = UiLang();
-    if(lg == LG_EN || lg == LG_RU || lg == LG_JA) return en;
-    for(int i = 0; i < kTxCount; ++i)
-    {
-        if(strcmp(kTx[i].en, en)) continue;
-        const char* s = lg == LG_FR ? kTx[i].fr : lg == LG_DE ? kTx[i].de : lg == LG_IT ? kTx[i].it : lg == LG_ES ? kTx[i].es : lg == LG_ID ? kTx[i].id : lg == LG_AR ? kTx[i].ar : en;
-        return (s && s[0]) ? std::string(s) : std::string(en);
-    }
-    return en;
-}
-
-/* Indonesian / Arabic for a text the game (or a mod) gave in English; empty when there is no translation.
-   Order: a whole phrase of the tables; "ENABLE X" / "X VOLUME" style patterns around a part that is itself translated (or kept as it
-   is: mod names, numbers); substrings (save slot names). */
-struct IdPat { const char* word; bool prefix; const char* id; const char* ar; };       // prefix: "<word> X", else "X <word>" - becomes "<lead> X"
-static const IdPat kIdPats[] = {
-    { "ENABLE", true, "AKTIFKAN", "تفعيل" }, { "DISABLE", true, "NONAKTIFKAN", "تعطيل" }, { "SHOW", true, "TAMPILKAN", "عرض" }, { "HIDE", true, "SEMBUNYIKAN", "إخفاء" },
-    { "VOLUME", false, "VOLUME", "مستوى صوت" }, { "SIZE", false, "UKURAN", "حجم" }, { "SPEED", false, "KECEPATAN", "سرعة" }, { "COLOR", false, "WARNA", "لون" },
-    { "QUALITY", false, "KUALITAS", "جودة" }, { "SENSITIVITY", false, "SENSITIVITAS", "حساسية" }, { "OPACITY", false, "OPASITAS", "شفافية" },
-    { "DISTANCE", false, "JARAK", "مسافة" }, { "COUNTER", false, "PENGHITUNG", "عداد" },
-};
 static bool PhraseExact(int lg, const std::string& n, std::string& out)
 {
-    for(int i = 0; i < kTxCount; ++i) if(n == kTx[i].en) { out = lg == LG_AR ? kTx[i].ar : kTx[i].id; return true; }
-    for(int i = 0; i < kIdPhraseCount; ++i) if(n == kIdPhrases[i].en) { out = lg == LG_AR ? kIdPhrases[i].ar : kIdPhrases[i].id; return true; }
+    int col = LangCol(lg); if(col < 0) return false;
+    LoadUserDict(col);
+    if(g_userDictCount[col]) { std::map<std::string, std::string>::const_iterator it = g_userDict[col].find(n); if(it != g_userDict[col].end()) { out = it->second; return true; } }
+    for(int i = 0; i < kTxCount; ++i) if(n == kTx[i].en) { const char* s = TxCol(kTx[i], lg); if(s && s[0]) { out = s; return true; } }
+    for(int i = 0; i < kDictCount; ++i) if(n == kDict[i].en) { const char* s = DictCol(kDict[i], lg); if(s && s[0]) { out = s; return true; } break; }
+    if(lg == LG_ID || lg == LG_AR)
+        for(int i = 0; i < kIdPhraseCount; ++i) if(n == kIdPhrases[i].en) { out = lg == LG_AR ? kIdPhrases[i].ar : kIdPhrases[i].id; return true; }
     return false;
 }
+
+/* "<word> X" (prefix) or "X <word>": the translation is a template, %s = X translated again */
+struct Pat { const char* word; bool prefix; const char* t[6]; };      // fr de it es id ar
+static const Pat kPats[] = {
+    { "ENABLE",  true,  { "ACTIVER %s", "%s AKTIVIEREN", "ATTIVA %s", "ACTIVAR %s", "AKTIFKAN %s", "\xD8\xAA\xD9\x81\xD8\xB9\xD9\x8A\xD9\x84 %s" } },
+    { "DISABLE", true,  { "DESACTIVER %s", "%s DEAKTIVIEREN", "DISATTIVA %s", "DESACTIVAR %s", "NONAKTIFKAN %s", "\xD8\xAA\xD8\xB9\xD8\xB7\xD9\x8A\xD9\x84 %s" } },
+    { "SHOW",    true,  { "AFFICHER %s", "%s ANZEIGEN", "MOSTRA %s", "MOSTRAR %s", "TAMPILKAN %s", "\xD8\xB9\xD8\xB1\xD8\xB6 %s" } },
+    { "HIDE",    true,  { "MASQUER %s", "%s AUSBLENDEN", "NASCONDI %s", "OCULTAR %s", "SEMBUNYIKAN %s", "\xD8\xA5\xD8\xAE\xD9\x81\xD8\xA7\xD8\xA1 %s" } },
+    { "USE",     true,  { "UTILISER %s", "%s VERWENDEN", "USA %s", "USAR %s", "GUNAKAN %s", "\xD8\xA7\xD8\xB3\xD8\xAA\xD8\xAE\xD8\xAF\xD8\xA7\xD9\x85 %s" } },
+    { "VOLUME",  false, { "VOLUME %s", "%s-LAUTSTARKE", "VOLUME %s", "VOLUMEN DE %s", "VOLUME %s", "\xD9\x85\xD8\xB3\xD8\xAA\xD9\x88\xD9\x89 \xD8\xB5\xD9\x88\xD8\xAA %s" } },
+    { "SIZE",    false, { "TAILLE %s", "%s-GROSSE", "DIMENSIONE %s", "TAMANO DE %s", "UKURAN %s", "\xD8\xAD\xD8\xAC\xD9\x85 %s" } },
+    { "SPEED",   false, { "VITESSE %s", "%s-GESCHWINDIGKEIT", "VELOCITA %s", "VELOCIDAD DE %s", "KECEPATAN %s", "\xD8\xB3\xD8\xB1\xD8\xB9\xD8\xA9 %s" } },
+    { "COLOR",   false, { "COULEUR %s", "%s-FARBE", "COLORE %s", "COLOR DE %s", "WARNA %s", "\xD9\x84\xD9\x88\xD9\x86 %s" } },
+    { "QUALITY", false, { "QUALITE %s", "%s-QUALITAT", "QUALITA %s", "CALIDAD DE %s", "KUALITAS %s", "\xD8\xAC\xD9\x88\xD8\xAF\xD8\xA9 %s" } },
+    { "SENSITIVITY", false, { "SENSIBILITE %s", "%s-EMPFINDLICHKEIT", "SENSIBILITA %s", "SENSIBILIDAD DE %s", "SENSITIVITAS %s", "\xD8\xAD\xD8\xB3\xD8\xA7\xD8\xB3\xD9\x8A\xD8\xA9 %s" } },
+    { "OPACITY", false, { "OPACITE %s", "%s-DECKKRAFT", "OPACITA %s", "OPACIDAD DE %s", "OPASITAS %s", "\xD8\xB4\xD9\x81\xD8\xA7\xD9\x81\xD9\x8A\xD8\xA9 %s" } },
+    { "DISTANCE", false, { "DISTANCE %s", "%s-ENTFERNUNG", "DISTANZA %s", "DISTANCIA DE %s", "JARAK %s", "\xD9\x85\xD8\xB3\xD8\xA7\xD9\x81\xD8\xA9 %s" } },
+    { "COUNTER", false, { "COMPTEUR %s", "%s-ZAHLER", "CONTATORE %s", "CONTADOR DE %s", "PENGHITUNG %s", "\xD8\xB9\xD8\xAF\xD8\xA7\xD8\xAF %s" } },
+    { "MODE",    false, { "MODE %s", "%s-MODUS", "MODALITA %s", "MODO %s", "MODE %s", "\xD9\x88\xD8\xB6\xD8\xB9 %s" } },
+};
 static std::string PhraseSub(int lg, const std::string& n, int depth);
 static bool PhrasePattern(int lg, const std::string& n, std::string& out, int depth)
 {
-    for(size_t k = 0; k < sizeof(kIdPats) / sizeof(kIdPats[0]); ++k)
+    int col = LangCol(lg); if(col < 0) return false;
+    for(size_t k = 0; k < sizeof(kPats) / sizeof(kPats[0]); ++k)
     {
-        const IdPat& p = kIdPats[k]; size_t wl = strlen(p.word); std::string rest;
+        const Pat& p = kPats[k]; size_t wl = strlen(p.word); std::string rest;
         if(p.prefix) { if(n.size() > wl + 1 && n.compare(0, wl, p.word) == 0 && n[wl] == ' ') rest = n.substr(wl + 1); }
         else         { if(n.size() > wl + 1 && n.compare(n.size() - wl, wl, p.word) == 0 && n[n.size() - wl - 1] == ' ') rest = n.substr(0, n.size() - wl - 1); }
         if(rest.empty()) continue;
-        out = std::string(lg == LG_AR ? p.ar : p.id) + " " + PhraseSub(lg, rest, depth + 1);
+        std::string tpl = p.t[col], sub = PhraseSub(lg, rest, depth + 1);
+        size_t at = tpl.find("%s"); out = at == std::string::npos ? tpl + " " + sub : tpl.substr(0, at) + sub + tpl.substr(at + 2);
         return true;
     }
     return false;
+}
+/* word by word: the longest run of words (up to 4) that is a known phrase is replaced; unknown words stay */
+static std::string WordByWord(int lg, const std::string& n, int* hits)
+{
+    std::vector<std::string> w; size_t i = 0;
+    while(i < n.size()) { size_t e = n.find(' ', i); if(e == std::string::npos) e = n.size(); if(e > i) w.push_back(n.substr(i, e - i)); i = e + 1; }
+    std::string r; int h = 0;
+    for(size_t k = 0; k < w.size();)
+    {
+        size_t take = 0; std::string o;
+        for(size_t len = std::min((size_t)4, w.size() - k); len >= 1 && !take; --len)
+        {
+            std::string span = w[k]; for(size_t j = 1; j < len; ++j) span += " " + w[k + j];
+            if(PhraseExact(lg, span, o)) take = len;
+            else if(len == 1)                                                // "(BETA)" / "SPEED:" -> the word inside its punctuation
+            {
+                size_t a = span.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), b = span.find_last_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+                if(a != std::string::npos && (a > 0 || b + 1 < span.size()) && PhraseExact(lg, span.substr(a, b - a + 1), o)) { o = span.substr(0, a) + o + span.substr(b + 1); take = 1; }
+            }
+        }
+        if(!r.empty()) r += ' ';
+        if(take) { r += o; ++h; k += take; } else { r += w[k]; ++k; }
+    }
+    if(hits) *hits = h;
+    return r;
 }
 static std::string PhraseSub(int lg, const std::string& n, int depth)            // translation of a part of a phrase; unknown parts stay as they are
 {
     std::string o;
     if(PhraseExact(lg, n, o)) return o;
     if(depth < 3 && PhrasePattern(lg, n, o, depth)) return o;
-    return n;
+    int h = 0; std::string w = WordByWord(lg, n, &h);
+    return h ? w : n;
 }
-static std::string PhraseFor(int lg, const std::string& text)
+/* the text in language lg; "" when nothing of it is known. words = false: whole phrases / patterns / slot names only (no word-by-word, no log) */
+static std::string PhraseFor(int lg, const std::string& text, bool words = true)
 {
+    if(LangCol(lg) < 0) return "";
     std::string tail, n = NormPhrase(text, &tail);
-    if(n.empty() || (lg != LG_ID && lg != LG_AR)) return "";
+    if(n.empty()) return "";
     if(lg == LG_AR) { std::string t; for(size_t i = 0; i < tail.size(); ++i) t += (tail[i] == '?') ? "\xD8\x9F" : std::string(1, tail[i]); tail = t; }   // ? -> the Arabic question mark
     std::string o;
     if(PhraseExact(lg, n, o)) return o + tail;
     if(PhrasePattern(lg, n, o, 0)) return o + tail;
-    std::string r = n; bool hit = false;                              // tokens inside a longer text
-    for(size_t k = 0; k < sizeof(kIdTokens) / sizeof(kIdTokens[0]); ++k)
+    if(lg == LG_ID || lg == LG_AR)
     {
-        size_t at = r.find(kIdTokens[k].en);
-        if(at != std::string::npos) { r.replace(at, strlen(kIdTokens[k].en), lg == LG_AR ? kIdTokens[k].ar : kIdTokens[k].id); hit = true; }
+        std::string r = n; bool hit = false;                              // tokens inside a longer text
+        for(size_t k = 0; k < sizeof(kIdTokens) / sizeof(kIdTokens[0]); ++k)
+        {
+            size_t at = r.find(kIdTokens[k].en);
+            if(at != std::string::npos) { r.replace(at, strlen(kIdTokens[k].en), lg == LG_AR ? kIdTokens[k].ar : kIdTokens[k].id); hit = true; }
+        }
+        if(hit) return r + tail;
     }
-    return hit ? r + tail : std::string();
+    if(!words) return "";
+    int h = 0; std::string w = WordByWord(lg, n, &h);
+    if(h) return w + tail;
+    NoteUntranslated(lg, n);
+    return "";
+}
+
+/* PC menu phrase (English upper-case) in the PC menu language. English, Russian and Japanese stay English (the font has no glyphs for
+   the latter two). Phrases not in any table are still translated (word by word), so new labels need no code change. */
+static std::unordered_map<std::string, std::string> g_trCache;
+static std::string Tr(const char* en)
+{
+    int lg = UiLang();
+    if(LangCol(lg) < 0 || !en || !en[0]) return en ? en : "";
+    std::string key = std::string(1, (char)('0' + LangCol(lg))) + en;
+    std::unordered_map<std::string, std::string>::const_iterator it = g_trCache.find(key);
+    if(it != g_trCache.end()) return it->second;
+    std::string o = PhraseFor(lg, en);
+    if(o.empty()) o = en;
+    if(g_trCache.size() > 4000) g_trCache.clear();
+    g_trCache[key] = o;
+    return o;
 }
 
 /* "Menu De Pausa" -> "Menu de Pausa" after TitleCase: short connecting words stay small */

@@ -1,0 +1,5 @@
+source/libs/
+source/obj/
+assets/PCMenu/lang_missing.txt
+assets/PCMenu/idgxt_missing.txt
+dist/

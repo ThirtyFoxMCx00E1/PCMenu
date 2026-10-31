@@ -40,7 +40,11 @@
 #define LOGI(...) logger->Info(__VA_ARGS__)
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.1.9, PCMenu)
+#ifdef PCMENU_TRANSPARENT
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.0, PCMenu)
+#else
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.0, PCMenu)
+#endif
 NEEDGAME(com.rockstargames.gtasa)
 
 /* ------------------------------------------------------------------------------------------ */
@@ -288,6 +292,12 @@ static void SaveLanguageSetting()                         // rewrites (or adds) 
     LOGI("Language saved to pcmenu.ini: %s", line.c_str());
 }
 
+static void ExtraConfig(const std::string& k, const std::string& v);   // pcextra.h
+static bool TransparentBackdrop();                                       // pcextra.h
+static bool TransparentPicture();
+static void LoadResources();
+static std::string OwnerOf(uintptr_t addr);
+static void* g_texProgress = NULL;
 static void LoadConfig()
 {
     std::string txt = ReadFileText(g_dirPC + "pcmenu.ini");
@@ -312,12 +322,14 @@ static void LoadConfig()
         else if(k == "ArabicMirror")  g_cfgArMirror = atoi(v.c_str()) != 0;
         else if(k == "IndonesianText")    g_cfgIdGxt = atoi(v.c_str()) != 0;
         else if(k == "IndonesianTextLog") g_cfgIdGxtLog = atoi(v.c_str()) != 0;
+        else if(k == "LangMissingLog")    g_cfgLangLog = atoi(v.c_str()) != 0;
         else if(k == "Language")
         {
             std::string u = Upper(v);
             g_cfgLang = (u == "INDONESIAN" || u == "INDONESIA" || u == "ID" || u == "BAHASA INDONESIA") ? (int)LG_ID
                       : (u == "ARABIC" || u == "AR" || u == "ARABIA" || u == "\xD8\xA7\xD9\x84\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x8A\xD8\xA9") ? (int)LG_AR : 0;
         }
+        else ExtraConfig(k, v);
     }
 }
 
@@ -930,7 +942,7 @@ static std::string IdText(const char* key)
 static std::string LocalizeText(const std::string& s)    // Indonesian / Arabic PC menu: English wording of the game -> that language (everything else is left alone)
 {
     int lg = UiLang();
-    if(lg != LG_ID && lg != LG_AR) return s;
+    if(lg != LG_ID && lg != LG_AR) return s;                  // (fr / de / it / es: the slot names come from the game's GXT in that language already)
     std::string t = PhraseFor(lg, s);
     return t.empty() ? s : t;
 }
@@ -965,17 +977,21 @@ static std::string Resolve(const char* key, bool localize = true, bool* drawn = 
             }
         }
     }
-    if(localize && !text.empty() && (UiLang() == LG_ID || UiLang() == LG_AR))
+    int lgU = UiLang();
+    bool pcOnly = (lgU == LG_ID || lgU == LG_AR);                                       // languages the game itself does not have
+    bool latin  = (lgU >= LG_FR && lgU <= LG_ES);                                       // the game's GXT is already in that language: only a mod's own plain (English) text needs us
+    if(localize && !text.empty() && (pcOnly || (latin && !fromGxt)))
     {
-        int lg = UiLang(), gl = GameLanguage();
-        bool gameEn = (gl == LG_EN || gl < 0) && (textOK || !fromGxt);                // the text IS the English wording
+        int lg = lgU, gl = GameLanguage();
+        bool gameEn = !fromGxt || ((gl == LG_EN || gl < 0) && textOK);                  // the text IS the English wording
         std::string t;
-        if(gameEn) t = PhraseFor(lg, text);
-        if(t.empty()) { const char* k = KeyEnglish(key); if(k) t = PhraseFor(lg, k); }            // e.g. tile "LANGUAGE SETUP" (FEO_LAN) -> LANGUAGE
-        if(t.empty() && !gameEn) { const char* k = KeyEnglishSoft(key); if(k) t = PhraseFor(lg, k); }
-        if(t.empty() && !gameEn) t = PhraseFor(lg, text);                                       // text already replaced by an English name above
+        if(gameEn) t = PhraseFor(lg, text, false);
+        if(t.empty() && pcOnly) { const char* k = KeyEnglish(key); if(k) t = PhraseFor(lg, k, false); }            // e.g. tile "LANGUAGE SETUP" (FEO_LAN) -> LANGUAGE
+        if(t.empty() && pcOnly && !gameEn) { const char* k = KeyEnglishSoft(key); if(k) t = PhraseFor(lg, k, false); }
+        if(t.empty() && !gameEn) t = PhraseFor(lg, text, false);                                       // text already replaced by an English name above
         if(!t.empty()) return t;
         if(lg == LG_ID && fromGxt) { std::string idt = IdText(key); if(!idt.empty()) return idt; }   // no table wording: the Indonesian file's text
+        if(gameEn || !textOK) { t = PhraseFor(lg, text, true); if(!t.empty()) return t; }             // last: word by word (new / unknown options), else logged as missing
     }
     return text;
 }
@@ -1766,6 +1782,7 @@ static void HandlePageTouch(const Touch& t)
     g_prevDown = down;
 }
 
+static void ActivateModRow(int r);   // pcextra.h
 static void HandleRootTouch(const Touch& t)
 {
     bool down = t.down;
@@ -1801,17 +1818,7 @@ static void HandleRootTouch(const Touch& t)
             else
             {
                 int r = RowAtMods(y);
-                if(r == g_pressRow)
-                {
-                    if(r == (int)g_modRows.size()) { SndPlay(g_sndBack); OpenView(VIEW_MAIN); }
-                    else
-                    {
-                        ModRow& mr = g_modRows[r];
-                        if(mr.kind == MR_TAB && mr.cb) { SndPlay(g_sndSelect); VoidFn cb = mr.cb; LOGI("Mods action '%s' (tile %d) -> %p", mr.label.c_str(), mr.idx, (void*)cb); CallTile(g_activeTop, mr.idx, cb); }
-                        else if(mr.kind == MR_SETTINGS) { SndPlay(g_sndSelect); StartNav(""); }
-                        else if(mr.kind == MR_FILE && g_pcOptions && fnOnSettings) { SndPlay(g_sndSelect); StartNav(mr.label); }
-                    }
-                }
+                if(r == g_pressRow) ActivateModRow(r);
             }
         }
         g_pressRow = -1; g_dragging = false;
@@ -1845,8 +1852,8 @@ static void DrawCursor(float textLeft, float textW, float rowCenterY)      // th
 /* full-screen backdrop anchored to the top-right corner of the screen (16:9 / 20:9 phones) */
 static void DrawBackdrop(const char* title, const Theme& th, void* bg, int style)
 {
-    FillRect(0, 0, L.W, L.H, COL_BLACK);
-    if(bg)
+    if(!TransparentBackdrop()) FillRect(0, 0, L.W, L.H, COL_BLACK);
+    if(bg && TransparentPicture())
     {
         float w, h, y0 = 0.0f;
         if(style == BD_WIDE)     { w = 0.461f * L.W; h = 0.47f * L.H; }
@@ -1877,7 +1884,7 @@ static void DrawToast(const Theme& th)
 
 static void DrawLoading()
 {
-    FillRect(0, 0, L.W, L.H, COL_BLACK);
+    if(!TransparentBackdrop()) FillRect(0, 0, L.W, L.H, COL_BLACK);
     float cap = g_bank.capH * L.itemScale;
     std::string t = Tr("PLEASE WAIT");
     float w = g_bank.Width(t, L.itemScale, L.track);
@@ -2085,7 +2092,7 @@ static void DrawSettingsPage()
 static void DrawDialogPage()
 {
     const Theme& th = TH_BLUE;
-    FillRect(0, 0, L.W, L.H, COL_BLACK);
+    if(!TransparentBackdrop()) FillRect(0, 0, L.W, L.H, COL_BLACK);
     float cap = g_bank.capH * L.itemScale;
     for(size_t i = 0; i < g_dlgLines.size(); ++i)
     {
@@ -2103,11 +2110,14 @@ static void DrawDialogPage()
     DrawToast(th);
 }
 
+#include "pcextra.h"
+
 /* ------------------------------------------------------------------------------------------ */
 /*  Resource loading (first frame, render thread)                                               */
 /* ------------------------------------------------------------------------------------------ */
 static void LoadResources()
 {
+    if(g_resTried) return;
     g_resTried = true;
     bool ok = g_bank.Load("bank") && g_beck.Load("beck");
     { bool a = g_bank.LoadArabic("bank_ar"), b = g_beck.LoadArabic("beck_ar");                      // optional: Arabic glyphs
@@ -2115,6 +2125,7 @@ static void LoadResources()
       LOGI(g_arOK ? "Arabic glyph atlases loaded (bank_ar, beck_ar): Arabic is available on the Language page" : "Arabic glyph atlases (bank_ar / beck_ar in %spc/fonts/) not found: Arabic is not offered", g_dirPC.c_str()); }
     g_texArrow = LoadPNG("pc/images/arrow.png");
     g_texBack  = LoadPNG("pc/images/" + g_cfgBackground);
+    g_texProgress = LoadPNG("pc/images/ProgressTex.png");          // PC style loading bar (1.2.0)
     for(int n = 2; n <= 5; ++n) { char pth[48]; snprintf(pth, sizeof(pth), "pc/images/back%d.png", n); g_texBg[n] = LoadPNG(pth); }
     if(!ok) LOGE("Font atlases are missing in %spc/fonts/ (bank.png/.txt, beck.png/.txt). Run tools/gen_fonts.py or copy the PCMenu folder again.", g_dirPC.c_str());
     if(!g_texArrow) LOGE("Cannot load %spc/images/arrow.png", g_dirPC.c_str());
@@ -2302,6 +2313,7 @@ DECL_HOOKv(MobileMenu_Update, void* self)
             uint8_t mv = 1;
             if(SafeCopy((char*)self + OFF_MM_MAPMODE, &mv, 1) && mv == 0) { g_view = VIEW_MAIN; g_prevDown = false; LOGI("Map left through the stock Back: PC main view is back"); }
         }
+        ControllerNav();                                                // gamepad / keyboard (1.2.0)
         if(g_backRequested)
         {
             g_backRequested = false;
@@ -2347,14 +2359,18 @@ static bool SlotOK(const SlotHook& h)
 
 extern "C" void OnModLoad()
 {
+#ifdef PCMENU_TRANSPARENT
+    logger->SetTag(BYBIT("PCMenuT32", "PCMenuT64"));
+#else
     logger->SetTag(BYBIT("PCMenu32", "PCMenu64"));
+#endif
     g_hGame = aml->GetLibHandle("libGTASA.so");
     if(!g_hGame) { LOGE("libGTASA.so not found. PCMenu stays disabled."); return; }
 
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.1.9 (%s) starting; data dir %s", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.0%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     g_dirPC   = data + "PCMenu/";
     {
         std::string root = data;                                // strip ".../files/" -> ".../<package>/"
@@ -2508,5 +2524,6 @@ extern "C" void OnModLoad()
         }
         else LOGI("hook CText::Get skipped (symbol / fingerprint differ): the game's texts stay in the game's language");
     }
+    InstallExtras();                                               // transparent backdrop, controller, loading screen (1.2.0)
     LOGI("PCMenu loaded. Data: %s  Mods: %s", g_dirPC.c_str(), g_dirMods.c_str());
 }
