@@ -21,6 +21,10 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 4. Settings: `files/TYFMC/TYFMC.PCMENU.ini`. An old `files/PCMenu/pcmenu.ini` is copied there once, and an old
    `files/PCMenu/` folder is still used if `files/TYFMC/PCMenu/` does not exist.
 
+## New in 1.2.7
+
+- MULTIPLAYER is on the title (main) menu only. The pause menu no longer has it.
+
 ## New in 1.2.6
 
 - Fixed: no PC loading screen after RESUME / START (a save slot) on the title menu. That is the game's first loading

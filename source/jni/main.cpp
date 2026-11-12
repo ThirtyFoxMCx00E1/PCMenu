@@ -42,9 +42,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.6, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.7, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.6, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.7, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -1342,7 +1342,7 @@ static void BuildEntries()
     {
         PUSH("RESUME",         K_STOCK, "FEP_RES", fnOnResume,    false);
         PUSH("START NEW GAME", K_STOCK, "FEP_STG", fnOnStartGame, true);
-        if(g_cfgMpButton) PUSH("MULTIPLAYER", K_MP, "", NULL, false);
+        // 1.2.7: no MULTIPLAYER in the pause menu (title menu only)
         PUSH("MAP",            K_MAP,   "",        NULL,          false);
         PUSH("STATS",          K_STOCK, "FEH_STA", fnOnStats,     false);
         PUSH("BRIEF",          K_STOCK, "FEH_BRI", fnOnBriefs,    false);
@@ -2497,7 +2497,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.6%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.7%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     // 1.2.3: everything lives in files/TYFMC/PCMenu/ and the settings in files/TYFMC/TYFMC.PCMENU.ini (like the other
     // TYFMC mods); an old files/PCMenu/ install still works when the new folder is not there
     g_dirPC   = data + "TYFMC/PCMenu/";
