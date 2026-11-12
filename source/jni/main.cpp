@@ -42,9 +42,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.5, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.6, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.5, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.6, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -1503,7 +1503,7 @@ static void OpenView(int v)
    button is drawn dimmed and only says how to get it.
    1.2.5: MP is also found through its plain export MP_GetMultiplayerApi (any loaded lib*MP*.so, whatever the file is
    called), "MP too old" and "MP still loading" get their own message, and every step is in the log. */
-struct MPMultiplayerApi { int version; void (*Multiplayer)(); int (*Available)(); };
+struct MPMultiplayerApi { int version; void (*Multiplayer)(); int (*Available)(); int (*Loading)(); };   // Loading: v2 (MP 4.13.12)
 static bool MpApiOk(MPMultiplayerApi* a) { return a && a->version >= 1 && a->Multiplayer && a->Available; }
 static MPMultiplayerApi* MpFindExport()
 {
@@ -1530,6 +1530,7 @@ static MPMultiplayerApi* MpFindExport()
     fclose(m);
     return r;
 }
+static std::atomic<MPMultiplayerApi*> g_mpApiSeen(NULL);   // 1.2.6: read by the loading thread (it never looks MP up itself)
 static MPMultiplayerApi* MpApi()
 {
     static MPMultiplayerApi* api = NULL; static int64_t triedMs = -100000; static int logged = 0;
@@ -1538,12 +1539,13 @@ static MPMultiplayerApi* MpApi()
         triedMs = NowMs();
         MPMultiplayerApi* a = (MPMultiplayerApi*)GetInterface("MPMultiplayer"); const char* via = "AML interface";
         if(!MpApiOk(a)) { a = MpFindExport(); via = "MP_GetMultiplayerApi export"; }
-        if(MpApiOk(a)) { api = a; LOGI("MULTIPLAYER: MP mod found (%s, API v%d)", via, a->version); }
+        if(MpApiOk(a)) { api = a; g_mpApiSeen.store(a); LOGI("MULTIPLAYER: MP mod found (%s, API v%d)", via, a->version); }
         else if(logged < 3) { ++logged; LOGI("MULTIPLAYER: no MP API yet (MP mod %s)", aml && aml->HasMod("net.thirtyfox.mp") ? "loaded, older than 4.13.10" : "not loaded"); }
     }
     return api;
 }
 static bool MpInstalled() { return MpApi() || (aml && aml->HasMod("net.thirtyfox.mp")); }
+static bool MpLoading() { MPMultiplayerApi* a = g_mpApiSeen.load(); return a && a->version >= 2 && a->Loading && a->Loading() != 0; }   // 1.2.6
 static bool MpAvailable() { MPMultiplayerApi* a = MpApi(); return a && a->Available() != 0; }
 
 static void ActivateMain(int idx)
@@ -2495,7 +2497,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.5%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.6%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     // 1.2.3: everything lives in files/TYFMC/PCMenu/ and the settings in files/TYFMC/TYFMC.PCMENU.ini (like the other
     // TYFMC mods); an old files/PCMenu/ install still works when the new folder is not there
     g_dirPC   = data + "TYFMC/PCMenu/";
@@ -2660,5 +2662,6 @@ extern "C" void OnModLoad()
         else LOGI("hook CText::Get skipped (symbol / fingerprint differ): the game's texts stay in the game's language");
     }
     InstallExtras();                                               // transparent backdrop, controller, loading screen (1.2.0)
+    RegisterInterface("PCMenuLoading", &g_lsApi);                  // 1.2.6: MP leaves the loading screen to us while ours is on
     LOGI("PCMenu loaded. Data: %s  Mods: %s", g_dirPC.c_str(), g_dirMods.c_str());
 }

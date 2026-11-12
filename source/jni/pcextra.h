@@ -542,7 +542,8 @@ static void DrawLoadText(uint8_t a)
         DrawText(g_bank, tip, lx, baseT, ts, 0, Col{ 175, 175, 175, a });
     }
     char st[48]; int pc = (int)(LoadPercent() + 0.5f);
-    snprintf(st, sizeof(st), "%s  %d%%", pc >= 100 ? "STARTING GAME" : pc >= 60 ? "LOADING WORLD" : pc >= 25 ? "LOADING MODELS" : "LOADING MANIFEST ASSETS", pc);
+    if(MpLoading()) snprintf(st, sizeof(st), "%s  %d%%", pc >= 100 ? "READY" : pc >= 60 ? "CONNECTING TO MULTIPLAYER" : "LOADING WORLD", pc);   // 1.2.6: MULTIPLAYER
+    else snprintf(st, sizeof(st), "%s  %d%%", pc >= 100 ? "STARTING GAME" : pc >= 60 ? "LOADING WORLD" : pc >= 25 ? "LOADING MODELS" : "LOADING MANIFEST ASSETS", pc);
     float w = g_bank.Width(st, ss, 0);
     DrawText(g_bank, st, L.W - m - w, L.H - m * 0.9f, ss, 0, Col{ 215, 215, 215, a });
 }
@@ -591,12 +592,17 @@ static bool LegalScreen() { uint8_t b = 0; if(g_pLsLegal) SafeCopy(g_pLsLegal, &
 /* main thread: the loading screen is about to start */
 DECL_HOOKv(LS_Init, bool legal, bool dontReload)
 {
-    if(g_cfgLoadScreen && !legal && NowMs() - g_lsLastMs.load() > 500)   // (never while a loading thread may still draw the current set)
+    MpApi();                                                // 1.2.6: (main thread) MP looked up before the loading thread draws
+    // 1.2.6: also for the legal loading screen. RESUME / START (a save slot) on the title menu is the game's first loading
+    // screen, which starts as the legal screen: 1.2.5 prepared nothing for it, so the stock screen stayed for the whole
+    // load. Now the pictures are ready and the PC screen takes over as soon as the legal text is gone.
+    if(g_cfgLoadScreen && NowMs() - g_lsLastMs.load() > 500)   // (never while a loading thread may still draw the current set)
     {
         int64_t t0 = NowMs();
         PrepareSplashSet();
         g_lsStartMs = 0;                                    // the render hook restarts its fade / timer
         g_lsLastMs.store(-100000);
+        LOGI("PC loading screen: Init(legal %d) -> %d picture(s) ready", (int)legal, g_lsSetN.load());
         if(!g_lsLogged) { g_lsLogged = true; LOGI("PC loading screen: %d picture(s) prepared on the main thread in %d ms (%s order, %.1f s each)", g_lsSetN.load(), (int)(NowMs() - t0), g_cfgSplashRandom ? "random" : "sequential", g_cfgSplashSec); }
         MusicStart();
     }
@@ -607,7 +613,8 @@ DECL_HOOKv(LS_Init, bool legal, bool dontReload)
 DECL_HOOKv(LS_RenderSplash, void)
 {
     int n = g_lsSetN.load();
-    if(!g_cfgLoadScreen || LegalScreen() || n <= 0) { LS_RenderSplash(); return; }   // nothing prepared: the stock picture (and the stock bar)
+    if(!g_cfgLoadScreen || n <= 0) { LS_RenderSplash(); return; }   // nothing prepared: the stock picture (and the stock bar)
+    if(LegalScreen()) { g_lsStartMs = 0; g_lsLastMs.store(NowMs()); LS_RenderSplash(); return; }  // the legal text first; ours fades in right after it
     int64_t now = NowMs();
     if(g_lsStartMs == 0 || now - g_lsLastMs.load() > 1500) { g_lsStartMs = now; g_lsSwitchMs = now; g_lsShown = 0; }
     g_lsLastMs.store(now);
@@ -633,6 +640,12 @@ DECL_HOOKv(LS_RenderSplash, void)
     fnRenderState(RS_ZTEST, (void*)1);
     fnRenderState(RS_ZWRITE, (void*)1);
 }
+/* 1.2.6: "PCMenuLoading" (AML interface) so the MP mod does not cover our loading screen with its own panel when
+   MULTIPLAYER loads the game. struct { int version; int (*Active)(); }  Active = our pictures are prepared and drawn. */
+struct PCMenuLoadingApi { int version; int (*Active)(); };
+static int LsApiActive() { return (g_cfgLoadScreen && g_lsHook && g_lsSetN.load() > 0) ? 1 : 0; }
+static PCMenuLoadingApi g_lsApi = { 1, LsApiActive };
+
 DECL_HOOKv(LS_RenderLoadingBar, void)
 {
     if(g_cfgLoadScreen && g_cfgProgressBar && !LegalScreen() && g_lsSetN.load() > 0) return;   // our bar is drawn with the splash
