@@ -28,7 +28,8 @@ static bool  g_cfgSplashRandom = false;   // Order=Random | Sequential
 static bool  g_cfgProgressBar  = true;    // ProgressBar=1
 static bool  g_cfgLoadMusic    = false;   // LoadingMusic=1: ldsc.mp3 while loading
 static int   g_cfgSplashPreload = 3;      // SplashPreload=1..8: pictures prepared (main thread) per loading screen
-static int   g_cfgSplashFit    = 2;       // SplashFit=Fill | Fit | PC (PC: the picture framed in black, as the PC game shows it)
+static int   g_cfgSplashFit    = 0;       // SplashFit=Fill | Fit | PC (1.2.3 default Fill: the picture covers the screen, like the reference)
+static bool  g_cfgLoadText     = true;    // LoadingText=1 (1.2.3): the Rust style tip (bottom left) + loading step (bottom right)
 
 static void ExtraConfig(const std::string& k, const std::string& v)
 {
@@ -48,6 +49,7 @@ static void ExtraConfig(const std::string& k, const std::string& v)
     else if(k == "ProgressBar")        g_cfgProgressBar = i != 0;
     else if(k == "LoadingMusic")       g_cfgLoadMusic = i != 0;
     else if(k == "SplashPreload")      g_cfgSplashPreload = std::min(8, std::max(1, i));
+    else if(k == "LoadingText")        g_cfgLoadText = i != 0;
     else if(k == "SplashFit")          { std::string u = Upper(v); g_cfgSplashFit = (u == "FILL" || u == "0") ? 0 : (u == "FIT" || u == "1") ? 1 : 2; }
 }
 
@@ -455,27 +457,94 @@ static float LoadPercent()
     float p = 0; if(g_pLsPercent) SafeCopy(g_pLsPercent, &p, sizeof(p));
     return p != p ? 0.0f : std::min(100.0f, std::max(0.0f, p));
 }
-/* PC loading bar (taken from the PC game): a thin bar right under the "San Andreas" logo, black outline, grey fill,
-   the empty part at half brightness. No text, no background strip. Measured on the PC screenshot: picture x 8.8%..23.8%
-   (here matched to the mobilesc logo: 7.5%..36.5%), top at 91.4% of the picture height, 1.9% high. */
+/* 1.2.3: the loading bar of the reference picture (maxresdefault (4).jpg) in the look of the ARM ProgressTex bar
+   (ARM/LoadingBar/ProgressTex.png): a white bar with a black outline right under the big "San Andreas" title at the
+   left, grey where it is not filled yet. Measured on the reference (1280x720): x 7.8%..36%, y 91.3%..93.2%. */
 static void DrawProgressBar(const PicRect& r, uint8_t a)
 {
     float frac = LoadPercent() / 100.0f;
-    float pw = r.x1 - r.x0, ph = r.y1 - r.y0;
-    float x0 = r.x0 + pw * 0.091f, x1 = r.x0 + pw * 0.238f;     // measured on the PC game: just under "San Andreas"
-    float y0 = r.y0 + ph * 0.897f, y1 = y0 + std::max(6.0f, ph * 0.0165f);
-    if(y1 > L.H - 2) { float d = y1 - (L.H - 2); y0 -= d; y1 -= d; }   // (Fill on a tall screen) keep it on screen
-    float b = std::max(1.0f, (y1 - y0) / 5.0f);                         // outline
-    FillRect(x0, y0, x1, y1, Col{ 0, 0, 0, a });
-    float ix0 = x0 + b, ix1 = x1 - b, iy0 = y0 + b, iy1 = y1 - b, fx = ix0 + (ix1 - ix0) * frac;
-    float m = (iy0 + iy1) * 0.5f;
-    if(fx > ix0)
-    {   // fill with the soft vertical shading of the PC bar (90 at the edges, 106 in the middle)
-        FillRect(ix0, iy0, fx, m, Col{ 96, 96, 98, a });
-        FillRect(ix0, m, fx, iy1, Col{ 104, 103, 106, a });
-        FillRect(ix0, iy0, fx, iy0 + b * 0.6f, Col{ 86, 86, 88, a });
+    float x0 = L.W * 0.078f, x1 = L.W * 0.36f;
+    float y0 = L.H * 0.913f, y1 = y0 + std::max(7.0f, L.H * 0.019f);
+    (void)r;
+    float b = std::max(1.5f, (y1 - y0) / 6.0f);
+    FillRect(x0 - b, y0 - b, x1 + b, y1 + b, Col{ 0, 0, 0, a });
+    float fx = x0 + (x1 - x0) * frac;
+    FillRect(x0, y0, x1, y1, Col{ 100, 100, 100, (uint8_t)(a * 0.85f) });
+    if(fx > x0) FillRect(x0, y0, fx, y1, Col{ 255, 255, 255, a });
+}
+/* 1.2.3: the Rust (Facepunch) loading screen touches: the picture darker towards the edges and the bottom, a red (!)
+   with a red caps heading and a small grey tip at the bottom left, the loading step in light grey caps bottom right */
+static void FillGrad(float x0, float y0, float x1, float y1, uint8_t aStart, uint8_t aEnd, bool vertical)
+{
+    const int n = 24;
+    for(int i = 0; i < n; ++i)
+    {
+        float t0 = (float)i / n, t1 = (float)(i + 1) / n; uint8_t al = (uint8_t)(aStart + (aEnd - aStart) * (t0 + t1) * 0.5f);
+        if(vertical) FillRect(x0, y0 + (y1 - y0) * t0, x1, y0 + (y1 - y0) * t1, Col{ 0, 0, 0, al });
+        else         FillRect(x0 + (x1 - x0) * t0, y0, x0 + (x1 - x0) * t1, y1, Col{ 0, 0, 0, al });
     }
-    if(fx < ix1) FillRect(fx, iy0, ix1, iy1, Col{ 48, 48, 49, a });
+}
+static void DrawVignette(uint8_t a)
+{
+    const float k = a / 255.0f;
+    FillGrad(0, 0, L.W * 0.16f, L.H, (uint8_t)(150 * k), 0, false);
+    FillGrad(L.W * 0.84f, 0, L.W, L.H, 0, (uint8_t)(150 * k), false);
+    FillGrad(0, 0, L.W, L.H * 0.14f, (uint8_t)(120 * k), 0, true);
+    FillGrad(0, L.H * 0.70f, L.W, L.H, 0, (uint8_t)(190 * k), true);
+}
+static void FillDisc(float cx, float cy, float r, Col c)
+{
+    const int n = std::max(8, (int)(r * 1.2f));
+    for(int i = 0; i < n; ++i)
+    {
+        float y0 = -r + 2 * r * i / n, y1 = -r + 2 * r * (i + 1) / n, ym = (y0 + y1) * 0.5f, hw = sqrtf(std::max(0.0f, r * r - ym * ym));
+        FillRect(cx - hw, cy + y0, cx + hw, cy + y1, c);
+    }
+}
+static const char* const kLsTips[] = {
+    "SAVE OFTEN: THE SAFE HOUSES KEEP YOUR PROGRESS",
+    "PAY 'N' SPRAY REPAIRS YOUR CAR AND LOSES THE COPS",
+    "EAT AND WORK OUT TO KEEP CJ IN SHAPE",
+    "GANG TERRITORIES CAN BE TAKEN BACK IN WARS",
+    "MULTIPLAYER: INSTALL LIBMP IN MODS AND TAP MULTIPLAYER",
+};
+static void DrawLoadText(uint8_t a)
+{
+    if(!g_cfgLoadText || !g_resOK || !g_bank.tex) return;
+    const float m = L.W * 0.034f, sc = L.H / 1080.0f, capH = g_bank.capH;
+    const float hs = 30.0f * sc / capH, ts = 22.0f * sc / capH, ss = 28.0f * sc / capH;   // cap heights in px at 1080p
+    const int nt = (int)(sizeof(kLsTips) / sizeof(kLsTips[0]));
+    const char* tip = kLsTips[(NowMs() / 6000) % nt];
+    const float baseT = L.H - m * 0.9f, baseH = baseT - 22.0f * sc - 18.0f * sc;
+    const Col red = Col{ 205, 65, 43, a };
+    const float r = 19.0f * sc, icx = m * 0.25f + L.W * 0.0f + m + r, icy = baseH - 15.0f * sc;
+    float lx = icx - r;
+    if(L.W * 0.36f < lx) lx = m;    // (never happens: the tip sits right of the bar's left edge)
+    // above the bar on the left would cover the title: the tip goes to the bottom right column instead when the bar is on
+    if(g_cfgProgressBar)
+    {   // the bar is bottom left (reference), so the Rust tip block moves to the right, above the loading step
+        const std::string head = "GAMEPLAY TIP";
+        float wH = g_bank.Width(head, hs, 0), wT = g_bank.Width(tip, ts, 0);
+        float right = L.W - m, by = L.H - m * 0.9f - 28.0f * sc - 26.0f * sc;
+        DrawText(g_bank, tip, right - wT, by, ts, 0, Col{ 175, 175, 175, a });
+        float hy = by - 22.0f * sc - 16.0f * sc, hx = right - wH;
+        DrawText(g_bank, head, hx, hy, hs, 0, red);
+        FillDisc(hx - r - 10.0f * sc, hy - 15.0f * sc, r, red);
+        FillRect(hx - r - 10.0f * sc - 2.2f * sc, hy - 15.0f * sc - r * 0.6f, hx - r - 10.0f * sc + 2.2f * sc, hy - 15.0f * sc + r * 0.18f, Col{ 255, 255, 255, a });
+        FillDisc(hx - r - 10.0f * sc, hy - 15.0f * sc + r * 0.45f, r * 0.16f, Col{ 255, 255, 255, a });
+    }
+    else
+    {
+        FillDisc(icx, icy, r, red);
+        FillRect(icx - 2.2f * sc, icy - r * 0.6f, icx + 2.2f * sc, icy + r * 0.18f, Col{ 255, 255, 255, a });
+        FillDisc(icx, icy + r * 0.45f, r * 0.16f, Col{ 255, 255, 255, a });
+        DrawText(g_bank, "GAMEPLAY TIP", icx + r + 12.0f * sc, baseH, hs, 0, red);
+        DrawText(g_bank, tip, lx, baseT, ts, 0, Col{ 175, 175, 175, a });
+    }
+    char st[48]; int pc = (int)(LoadPercent() + 0.5f);
+    snprintf(st, sizeof(st), "%s  %d%%", pc >= 100 ? "STARTING GAME" : pc >= 60 ? "LOADING WORLD" : pc >= 25 ? "LOADING MODELS" : "LOADING MANIFEST ASSETS", pc);
+    float w = g_bank.Width(st, ss, 0);
+    DrawText(g_bank, st, L.W - m - w, L.H - m * 0.9f, ss, 0, Col{ 215, 215, 215, a });
 }
 
 /* ---- loading music (ldsc.mp3 through an OpenSL URI/FD player; stopped by a watcher when the loading screen is gone) ---- */
@@ -558,7 +627,9 @@ DECL_HOOKv(LS_RenderSplash, void)
         float k = std::min(1.0f, (t - (holdMs - fadeMs)) / fadeMs);
         DrawSplash(nxt, SplashRect(nxt), (uint8_t)(255.0f * k));
     }
+    DrawVignette(ai);                                       // 1.2.3: the Rust style darker edges / bottom
     if(g_cfgProgressBar) DrawProgressBar(r, ai);
+    DrawLoadText(ai);
     fnRenderState(RS_ZTEST, (void*)1);
     fnRenderState(RS_ZWRITE, (void*)1);
 }

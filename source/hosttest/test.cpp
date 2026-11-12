@@ -287,6 +287,12 @@ int main()
     }
     PushNow(rootScr); Idle(3);
     CHECK(g_kind == SK_ROOT && g_isPause);
+    {   // 1.2.3: MULTIPLAYER (no MP mod in the test = dimmed, refused with a toast); the rest of the test runs without it
+        g_cfgMpButton = true; BuildEntries();
+        CHECK(g_entries.size() == 8 && g_entries[2].kind == K_MP && g_entries[2].label == "MULTIPLAYER" && !MpAvailable());
+        g_toastFrames = 0; ActivateMain(2); CHECK(g_toastFrames > 0 && g_toast.find("MULTIPLAYER NOT AVAILABLE") == 0);
+        g_cfgMpButton = false; BuildEntries();
+    }
     CHECK(g_entries.size() == 7);
     { bool anyMods = false; for(auto& e : g_entries) if(e.label == "MODS") anyMods = true; CHECK(!anyMods); }
     CHECK(g_entries[5].label == "OPTIONS" && g_entries[6].label == "QUIT GAME");

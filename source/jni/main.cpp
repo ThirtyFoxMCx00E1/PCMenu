@@ -12,6 +12,7 @@
 //     (Resume / Options / Stats / Brief / Start Game / Quit), so game behaviour is unchanged.
 #include <mod/amlmod.h>
 #include <mod/logger.h>
+#include <mod/interface.h>
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -41,9 +42,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.3, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.4, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.3, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.4, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -203,7 +204,7 @@ static VoidFn fnOnResume = NULL, fnOnStartGame = NULL, fnOnStats = NULL,
 static std::string g_dirPC;        // .../files/PCMenu/
 static std::string g_dirMods;      // .../mods/
 
-/* config (PCMenu/pcmenu.ini) */
+/* config (TYFMC/TYFMC.PCMENU.ini; before 1.2.4: PCMenu/pcmenu.ini) */
 static bool  g_cfgEnabled     = true;
 static bool  g_cfgModsInMain  = false;   // ShowModsInMenu=1 brings the MODS entry back (the Mods list now lives in Options)
 static bool  g_cfgSounds      = true;
@@ -213,6 +214,7 @@ static std::string g_cfgBackground = "back8.png";
 static bool  g_cfgIdGxt       = true;    // IndonesianText=0 turns off the use of INDONESIAN.GXT (game texts stay in the game's language)
 static bool  g_cfgIdGxtLog    = true;    // IndonesianTextLog=0: do not write idgxt_missing.txt (the texts the file lacks)
 static bool  g_cfgArMirror    = true;    // ArabicMirror=0 keeps the PC layout (labels left, values right) in Arabic too; 1 mirrors it (right to left)
+static bool  g_cfgMpButton    = true;    // MultiplayerButton=1 (1.2.4): MULTIPLAYER under START GAME (needs the MP mod, libMP)
 static int   g_cfgLang        = 0;       // Language= in pcmenu.ini (also set from the Language page): 0 = follow the game, LG_ID = Indonesian, LG_AR = Arabic (the game itself has neither text file)
 static bool  g_arOK           = false;   // the Arabic glyph atlases (bank_ar / beck_ar) were found: only then Arabic can be chosen
 
@@ -272,9 +274,11 @@ static std::string ReadFileText(const std::string& path)
     fclose(f); return s;
 }
 
+static std::string g_iniPath;                              // 1.2.4: files/TYFMC/TYFMC.PCMENU.ini
+static std::string IniPath() { return g_iniPath.empty() ? g_dirPC + "pcmenu.ini" : g_iniPath; }
 static void SaveLanguageSetting()                         // rewrites (or adds) only the Language= line of pcmenu.ini
 {
-    std::string path = g_dirPC + "pcmenu.ini", txt = ReadFileText(path), out;
+    std::string path = IniPath(), txt = ReadFileText(path), out;
     std::string line = std::string("Language=") + (g_cfgLang == LG_ID ? "Indonesian" : g_cfgLang == LG_AR ? "Arabic" : "Auto");
     bool done = false; size_t pos = 0;
     while(pos < txt.size())
@@ -299,7 +303,7 @@ static void LoadResources();
 static std::string OwnerOf(uintptr_t addr);
 static void LoadConfig()
 {
-    std::string txt = ReadFileText(g_dirPC + "pcmenu.ini");
+    std::string txt = ReadFileText(IniPath());
     if(txt.empty()) return;
     size_t pos = 0;
     while(pos < txt.size())
@@ -314,6 +318,7 @@ static void LoadConfig()
         while(!v.empty() && v[0] == ' ') v.erase(0, 1);
         if(k == "Enabled")            g_cfgEnabled = atoi(v.c_str()) != 0;
         else if(k == "ShowModsInMenu") g_cfgModsInMain = atoi(v.c_str()) != 0;
+        else if(k == "MultiplayerButton") g_cfgMpButton = atoi(v.c_str()) != 0;
         else if(k == "Sounds")        g_cfgSounds = atoi(v.c_str()) != 0;
         else if(k == "PCOptions")     g_cfgPCOptions = atoi(v.c_str()) != 0;
         else if(k == "Scale")         { g_cfgScale = (float)atof(v.c_str()); if(g_cfgScale < 0.5f || g_cfgScale > 2.0f) g_cfgScale = 1.0f; }
@@ -339,7 +344,7 @@ static void* LoadPNG(const std::string& rel)
 {
     std::string abs = g_dirPC + rel;
     void* img = FileExists(abs) ? fnPngRead(abs.c_str()) : NULL;
-    if(!img) img = fnPngRead(("PCMenu/" + rel).c_str());   // relative to the game's files dir as a fallback
+    if(!img) img = fnPngRead(("TYFMC/PCMenu/" + rel).c_str());   // relative to the game's files dir as a fallback
     if(!img) { LOGE("PNG not readable: %s", abs.c_str()); return NULL; }
     void* tex = NULL;
     int w, h, d, flags;
@@ -610,7 +615,7 @@ static void SndPlay(Snd& s)
 /*  Menu model                                                                                  */
 /* ------------------------------------------------------------------------------------------ */
 enum eView { VIEW_MAIN = 0, VIEW_MODS, VIEW_MAP };
-enum eKind { K_STOCK = 0, K_MAP, K_MODS };
+enum eKind { K_STOCK = 0, K_MAP, K_MODS, K_MP };   // K_MP (1.2.4): MULTIPLAYER, handled by the MP mod (libMP) through its "MPMultiplayer" interface
 enum eScr  { SK_NONE = 0, SK_ROOT, SK_OPTIONS, SK_PAGE, SK_START };   // which kind of stock screen the PC menu currently replaces (SK_START = Start Game: New / Load / Delete tiles)
 enum ePageStyle { PS_SETTINGS = 0, PS_SLOTS, PS_DIALOG, PS_TILES_CENTER, PS_TILES_LEFT };   // how the current page is laid out
 enum eModRow { MR_FILE = 0, MR_TAB, MR_SETTINGS };
@@ -1332,11 +1337,12 @@ static std::string OptionsTitle() { return SmallWords(TitleCase(MenuLabel("OPTIO
 static void BuildEntries()
 {
     g_entries.clear();
-    #define PUSH(_en, _kind, _key, _fb, _tbl) { Entry e; e.label = MenuLabel(_en, _key, _tbl); if(_kind == K_MAP) e.label = MenuLabel("MAP", "FEH_MAP"); if(_kind == K_MODS) e.label = Tr("MODS"); e.kind = _kind; e.key = _key; e.fallback = _fb; g_entries.push_back(e); }
+    #define PUSH(_en, _kind, _key, _fb, _tbl) { Entry e; e.label = MenuLabel(_en, _key, _tbl); if(_kind == K_MAP) e.label = MenuLabel("MAP", "FEH_MAP"); if(_kind == K_MODS) e.label = Tr("MODS"); if(_kind == K_MP) e.label = Tr("MULTIPLAYER"); e.kind = _kind; e.key = _key; e.fallback = _fb; g_entries.push_back(e); }
     if(g_isPause)
     {
         PUSH("RESUME",         K_STOCK, "FEP_RES", fnOnResume,    false);
         PUSH("START NEW GAME", K_STOCK, "FEP_STG", fnOnStartGame, true);
+        if(g_cfgMpButton) PUSH("MULTIPLAYER", K_MP, "", NULL, false);
         PUSH("MAP",            K_MAP,   "",        NULL,          false);
         PUSH("STATS",          K_STOCK, "FEH_STA", fnOnStats,     false);
         PUSH("BRIEF",          K_STOCK, "FEH_BRI", fnOnBriefs,    false);
@@ -1348,6 +1354,7 @@ static void BuildEntries()
     {
         if(FindStock("FEP_RES")) PUSH("RESUME", K_STOCK, "FEP_RES", fnOnResume, false);
         PUSH("START GAME", K_STOCK, "FEP_STG", fnOnStartGame, false);
+        if(g_cfgMpButton) PUSH("MULTIPLAYER", K_MP, "", NULL, false);
         PUSH("OPTIONS",    K_STOCK, "FEP_OPT", fnOnSettings,  false);
         if(g_cfgModsInMain) PUSH("MODS", K_MODS, "", NULL, false);
         PUSH("QUIT GAME",  K_STOCK, "FEP_QUI", fnOnExit,      false);
@@ -1492,12 +1499,29 @@ static void OpenView(int v)
     g_view = v; g_scroll = 0; g_sel = 0; g_dragging = false;
     if(v == VIEW_MODS) RefreshModRows();
 }
+/* 1.2.4: MULTIPLAYER -> the MP mod (libMP in mods/) registers the AML interface "MPMultiplayer". Without it the
+   button is drawn dimmed and only says how to get it. */
+struct MPMultiplayerApi { int version; void (*Multiplayer)(); int (*Available)(); };
+static MPMultiplayerApi* MpApi()
+{
+    static MPMultiplayerApi* api = NULL; static int64_t triedMs = -100000;
+    if(!api && NowMs() - triedMs > 2000) { triedMs = NowMs(); api = (MPMultiplayerApi*)GetInterface("MPMultiplayer"); if(api && (api->version < 1 || !api->Multiplayer || !api->Available)) api = NULL; }
+    return api;
+}
+static bool MpAvailable() { MPMultiplayerApi* a = MpApi(); return a && a->Available() != 0; }
+
 static void ActivateMain(int idx)
 {
     if(idx < 0 || idx >= (int)g_entries.size()) return;
     const Entry& e = g_entries[idx];
     bool needsGame = (e.kind == K_MAP) || !strcmp(e.key, "FEH_STA") || !strcmp(e.key, "FEH_BRI");
     if(needsGame && !InGame()) { SndPlay(g_sndBack); SetToast(Tr("NOT AVAILABLE WITHOUT A RUNNING GAME")); LOGI("'%s' refused: no running game", e.label.c_str()); return; }
+    if(e.kind == K_MP)
+    {
+        if(!MpAvailable()) { SndPlay(g_sndBack); SetToast(Tr("MULTIPLAYER NOT AVAILABLE: INSTALL LIBMP IN MODS")); LOGI("MULTIPLAYER refused: no MP mod (MPMultiplayer interface)"); return; }
+        if(MenuPending()) return;
+        SndPlay(g_sndSelect); LOGI("MULTIPLAYER -> MP mod"); MpApi()->Multiplayer(); return;
+    }
     SndPlay(g_sndSelect);
     if(e.kind == K_MAP) { g_view = VIEW_MAP; SetMapMode(g_mmForInert, 1); NoteGangTerritory(); return; }   // the stock map becomes visible and scrollable at once
     if(e.kind == K_MODS) { OpenView(VIEW_MODS); return; }
@@ -1912,7 +1936,9 @@ static void DrawMainView()
         float w = g_bank.Width(g_entries[i].label, L.itemScale, L.track);
         float left = L.cx - w * 0.5f;
         bool sel = ((int)i == g_sel);
-        DrawText(g_bank, g_entries[i].label, left, cy + cap * 0.5f, L.itemScale, L.track, sel ? TH_BLUE.sel : TH_BLUE.dim);
+        Col c = sel ? TH_BLUE.sel : TH_BLUE.dim;
+        if(g_entries[i].kind == K_MP && !MpAvailable()) c.a = (uint8_t)(c.a * 0.45f);   // 1.2.4: no MP mod: dimmed
+        DrawText(g_bank, g_entries[i].label, left, cy + cap * 0.5f, L.itemScale, L.track, c);
         if(sel) DrawCursor(left, w, cy);
     }
     DrawToast(TH_BLUE);
@@ -2425,16 +2451,26 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.3%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
-    g_dirPC   = data + "PCMenu/";
+    LOGI("PCMenu 1.2.4%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    // 1.2.3: everything lives in files/TYFMC/PCMenu/ and the settings in files/TYFMC/TYFMC.PCMENU.ini (like the other
+    // TYFMC mods); an old files/PCMenu/ install still works when the new folder is not there
+    g_dirPC   = data + "TYFMC/PCMenu/";
+    if(!FileExists(g_dirPC + "pc/fonts/bank.png") && FileExists(data + "PCMenu/pc/fonts/bank.png")) { g_dirPC = data + "PCMenu/"; LOGI("Old install: using %s (move it to files/TYFMC/PCMenu/)", g_dirPC.c_str()); }
+    g_iniPath = data + "TYFMC/TYFMC.PCMENU.ini";
+    if(!FileExists(g_iniPath) && FileExists(g_dirPC + "pcmenu.ini"))
+    {   // keep the old settings: copied once into the new file
+        mkdir((data + "TYFMC").c_str(), 0775);
+        std::string old = ReadFileText(g_dirPC + "pcmenu.ini");
+        if(FILE* f = fopen(g_iniPath.c_str(), "wb")) { fwrite(old.data(), 1, old.size(), f); fclose(f); LOGI("Settings copied from %spcmenu.ini to %s", g_dirPC.c_str(), g_iniPath.c_str()); }
+    }
     {
         std::string root = data;                                // strip ".../files/" -> ".../<package>/"
         if(root.size() > 6 && root.compare(root.size() - 6, 6, "files/") == 0) root.erase(root.size() - 6);
         g_dirMods = root + "mods/";
     }
     LoadConfig();
-    if(!g_cfgEnabled) { LOGI("Disabled in pcmenu.ini"); return; }
-    if(!FileExists(g_dirPC + "pc/fonts/bank.png")) { LOGE("PCMenu folder not found at %s (copy the PCMenu folder there). PCMenu stays disabled.", g_dirPC.c_str()); return; }
+    if(!g_cfgEnabled) { LOGI("Disabled in %s", IniPath().c_str()); return; }
+    if(!FileExists(g_dirPC + "pc/fonts/bank.png")) { LOGE("PCMenu folder not found at %s (copy the TYFMC folder of the package into files/). PCMenu stays disabled.", g_dirPC.c_str()); return; }
 
     bool missing = false;
     void* fn = NULL; (void)fn;

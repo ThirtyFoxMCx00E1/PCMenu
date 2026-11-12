@@ -15,7 +15,7 @@ Steps : 1. the title is found by comparing all pictures (it is the same in every
 To add mobilesc24..27: put the untouched pictures into lds_original/ and run the script again."""
 import cv2, numpy as np, glob, sys, os, urllib.request, onnxruntime
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "lds_original"); DST = os.path.join(HERE, "..", "..", "assets", "PCMenu", "pc", "lds")
+SRC = os.path.join(HERE, "lds_original"); DST = os.path.join(HERE, "..", "..", "assets", "TYFMC", "PCMenu", "pc", "lds")
 MODEL = os.path.join(HERE, "lama_fp32.onnx"); URL = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
 first, last = (int(sys.argv[1]), int(sys.argv[2])) if len(sys.argv) > 2 else (0, 27)
 if not os.path.exists(MODEL): print("downloading", URL); urllib.request.urlretrieve(URL, MODEL)

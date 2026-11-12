@@ -16,12 +16,23 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 
 1. Install [AndroidModLoader](https://github.com/ThirtyFoxMCx00E1/AndroidModLoader).
 2. Copy the `.so` for your game (32 or 64-bit, normal or `T`) into `Android/data/com.rockstargames.gtasa/mods/`.
-3. Copy the `PCMenu` folder (from `assets/`) into `Android/data/com.rockstargames.gtasa/files/`.
-4. Settings: `files/PCMenu/pcmenu.ini`.
+3. Copy the `TYFMC` folder (from `assets/`) into `Android/data/com.rockstargames.gtasa/files/`
+   (so you get `files/TYFMC/PCMenu/...`).
+4. Settings: `files/TYFMC/TYFMC.PCMENU.ini`. An old `files/PCMenu/pcmenu.ini` is copied there once, and an old
+   `files/PCMenu/` folder is still used if `files/TYFMC/PCMenu/` does not exist.
+
+## New in 1.2.4
+
+- MULTIPLAYER button under START GAME / START NEW GAME. It opens the MP mod server list (MP 4.13.10 or newer,
+  `libMP` in `mods/`). Without MP it is drawn dimmed and says "MULTIPLAYER NOT AVAILABLE". `MultiplayerButton=0` hides it.
+- Files moved to `files/TYFMC/PCMenu/` and `files/TYFMC/TYFMC.PCMENU.ini`.
+- Loading screen in the Rust style: the original mobile pictures (`mobilesc*`) cycle full screen, a white progress bar
+  with a black outline at the bottom left, the gameplay tip (red (!) heading, grey text) and the status with the
+  percent at the bottom right (`LoadingText=1`).
 
 ## Custom arrow (1.2.3)
 
-- Put your own cursor in `files/PCMenu/pc/images/arrow_custom.png`. It wins over `arrow.png`, and no PCMenu package
+- Put your own cursor in `files/TYFMC/PCMenu/pc/images/arrow_custom.png`. It wins over `arrow.png`, and no PCMenu package
   ships that file, so updates or copying the `PCMenu` folder again never overwrite your arrow (they do overwrite `arrow.png`).
 - Any size or shape works: the picture is drawn whole with its own proportions (only the stock 64x128 `arrow.png` uses the old crop).
 - Changes show up while the game runs: the file is checked twice a second and reloaded when it changes; delete
@@ -57,4 +68,4 @@ ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=
 
 After editing `source/tools/pcdict.txt` run `python3 tools/gen_dict.py` (regenerates `jni/pcdict.h`).
 
-Host test (fake game, 64-bit layout): `cd source/hosttest && PCM_DIR=$PWD/../../assets/PCMenu/ ./run.sh`
+Host test (fake game, 64-bit layout): `cd source/hosttest && PCM_DIR=$PWD/../../assets/TYFMC/PCMenu/ ./run.sh`
