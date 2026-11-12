@@ -126,6 +126,21 @@ static bool HookAny(const char* what, const char* sym, void* hook, void** orig)
     return false;
 }
 
+/* 1.2.8: the loading screen functions are hooked inline first. CLoadingScreen::Init has no PLT slot at all (32 + 64 bit)
+   and the 64 bit DisplayPCScreen calls RenderSplash / RenderLoadingBar directly (bl), so with InlineHookFallback=0 the
+   1.2.0 - 1.2.7 PC loading screen was never switched on (the stock / another mod's screen stayed). */
+static bool HookLoading(const char* what, const char* sym, void* hook, void** orig)
+{
+    uintptr_t fn = aml->GetSym(g_hGame, sym);
+    if(fn)
+    {
+        bool ok = aml->Hook((void*)fn, hook, orig);
+        LOGI("hook %s -> %s (inline at %p)", what, ok ? "installed" : "FAILED", (void*)fn);
+        if(ok) return true;
+    }
+    return HookAny(what, sym, hook, orig);
+}
+
 /* ------------------------------------------------------------------------------------------ */
 /*  RenderWare helpers used below                                                               */
 /* ------------------------------------------------------------------------------------------ */
@@ -610,11 +625,16 @@ DECL_HOOKv(LS_Init, bool legal, bool dontReload)
 }
 
 /* loading thread: draw only (no RenderWare object is created or destroyed here) */
+static void DrawPcScreen(int n);
 DECL_HOOKv(LS_RenderSplash, void)
 {
     int n = g_lsSetN.load();
     if(!g_cfgLoadScreen || n <= 0) { LS_RenderSplash(); return; }   // nothing prepared: the stock picture (and the stock bar)
     if(LegalScreen()) { g_lsStartMs = 0; g_lsLastMs.store(NowMs()); LS_RenderSplash(); return; }  // the legal text first; ours fades in right after it
+    DrawPcScreen(n);
+}
+static void DrawPcScreen(int n)
+{
     int64_t now = NowMs();
     if(g_lsStartMs == 0 || now - g_lsLastMs.load() > 1500) { g_lsStartMs = now; g_lsSwitchMs = now; g_lsShown = 0; }
     g_lsLastMs.store(now);
@@ -648,7 +668,13 @@ static PCMenuLoadingApi g_lsApi = { 1, LsApiActive };
 
 DECL_HOOKv(LS_RenderLoadingBar, void)
 {
-    if(g_cfgLoadScreen && g_cfgProgressBar && !LegalScreen() && g_lsSetN.load() > 0) return;   // our bar is drawn with the splash
+    int n = g_lsSetN.load();
+    if(g_cfgLoadScreen && g_cfgProgressBar && !LegalScreen() && n > 0)
+    {   // 1.2.8: drawn once more here (the last draw before the frame ends), so a loading screen mod that draws its own
+        // picture / text after our splash hook cannot cover the PC loading screen
+        DrawPcScreen(n);
+        return;                                             // our bar is drawn with the splash
+    }
     LS_RenderLoadingBar();
 }
 
@@ -703,12 +729,12 @@ static void InstallExtras()
         g_pLsLegal   = (uint8_t*)aml->GetSym(g_hGame, "_ZN14CLoadingScreen14m_bLegalScreenE");
         if(!g_pLsPercent) { uintptr_t p = 0; if(SafeCopy((void*)(g_libBase + BYBIT(0x677FA8, 0x84DF70)), &p, sizeof(p)) && p) g_pLsPercent = (float*)p; }
         if(!g_pLsLegal)   { uintptr_t p = 0; if(SafeCopy((void*)(g_libBase + BYBIT(0x67611C, 0x84A298)), &p, sizeof(p)) && p) g_pLsLegal = (uint8_t*)p; }
-        g_lsInitHook = HookAny("CLoadingScreen::Init", "_ZN14CLoadingScreen4InitEbb", (void*)&HookOf_LS_Init, (void**)&LS_Init);
+        g_lsInitHook = HookLoading("CLoadingScreen::Init", "_ZN14CLoadingScreen4InitEbb", (void*)&HookOf_LS_Init, (void**)&LS_Init);
         if(g_lsInitHook)                                    // without Init (main thread) nothing can be prepared safely: the stock loading screen stays
         {
-            g_lsHook = HookAny("CLoadingScreen::RenderSplash", "_ZN14CLoadingScreen12RenderSplashEv", (void*)&HookOf_LS_RenderSplash, (void**)&LS_RenderSplash);
+            g_lsHook = HookLoading("CLoadingScreen::RenderSplash", "_ZN14CLoadingScreen12RenderSplashEv", (void*)&HookOf_LS_RenderSplash, (void**)&LS_RenderSplash);
             if(g_lsHook && g_cfgProgressBar)
-                g_lsBarHook = HookAny("CLoadingScreen::RenderLoadingBar", "_ZN14CLoadingScreen16RenderLoadingBarEv", (void*)&HookOf_LS_RenderLoadingBar, (void**)&LS_RenderLoadingBar);
+                g_lsBarHook = HookLoading("CLoadingScreen::RenderLoadingBar", "_ZN14CLoadingScreen16RenderLoadingBarEv", (void*)&HookOf_LS_RenderLoadingBar, (void**)&LS_RenderLoadingBar);
         }
         else LOGI("PC loading screen off: CLoadingScreen::Init could not be hooked (pictures must be loaded on the main thread)");
         LOGI("Loading screen: percent %p legal %p, init hook %d, splash hook %d, bar hook %d", (void*)g_pLsPercent, (void*)g_pLsLegal, (int)g_lsInitHook, (int)g_lsHook, (int)g_lsBarHook);

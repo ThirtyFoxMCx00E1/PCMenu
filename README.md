@@ -21,6 +21,11 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 4. Settings: `files/TYFMC/TYFMC.PCMENU.ini`. An old `files/PCMenu/pcmenu.ini` is copied there once, and an old
    `files/PCMenu/` folder is still used if `files/TYFMC/PCMenu/` does not exist.
 
+## New in 1.2.8
+
+- Fixed: the PC loading screen never showed (RESUME, NEW GAME / START and the title Multiplayer load). `CLoadingScreen::Init` has no PLT slot in the game, and the 64 bit game calls `RenderSplash` / `RenderLoadingBar` directly, so with `InlineHookFallback=0` the PC loading screen was switched off. The loading screen functions are now always hooked inline (PLT as the fallback).
+- The PC loading screen is drawn once more in the loading bar hook (the last draw of the frame), so another loading screen mod can no longer cover it. If another loading screen mod is installed, remove it to avoid two screens fighting.
+
 ## New in 1.2.7
 
 - MULTIPLAYER is on the title (main) menu only. The pause menu no longer has it.
