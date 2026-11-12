@@ -290,7 +290,10 @@ int main()
     {   // 1.2.3: MULTIPLAYER (no MP mod in the test = dimmed, refused with a toast); the rest of the test runs without it
         g_cfgMpButton = true; BuildEntries();
         CHECK(g_entries.size() == 8 && g_entries[2].kind == K_MP && g_entries[2].label == "MULTIPLAYER" && !MpAvailable());
-        g_toastFrames = 0; ActivateMain(2); CHECK(g_toastFrames > 0 && g_toast.find("MULTIPLAYER NOT AVAILABLE") == 0);
+        g_toastFrames = 0; ActivateMain(2); CHECK(g_toastFrames > 0 && g_toast.find("MULTIPLAYER NOT AVAILABLE") == 0 && !MpInstalled());
+        g_stubHasMp = true;                                                    // 1.2.5: an MP without the API: "update", not dimmed
+        g_toastFrames = 0; ActivateMain(2); CHECK(g_toastFrames > 0 && g_toast.find("UPDATE THE MP MOD") == 0 && MpInstalled());
+        g_stubHasMp = false;
         g_cfgMpButton = false; BuildEntries();
     }
     CHECK(g_entries.size() == 7);

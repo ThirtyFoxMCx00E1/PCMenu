@@ -42,9 +42,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.4, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.5, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.4, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.5, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -1500,14 +1500,50 @@ static void OpenView(int v)
     if(v == VIEW_MODS) RefreshModRows();
 }
 /* 1.2.4: MULTIPLAYER -> the MP mod (libMP in mods/) registers the AML interface "MPMultiplayer". Without it the
-   button is drawn dimmed and only says how to get it. */
+   button is drawn dimmed and only says how to get it.
+   1.2.5: MP is also found through its plain export MP_GetMultiplayerApi (any loaded lib*MP*.so, whatever the file is
+   called), "MP too old" and "MP still loading" get their own message, and every step is in the log. */
 struct MPMultiplayerApi { int version; void (*Multiplayer)(); int (*Available)(); };
+static bool MpApiOk(MPMultiplayerApi* a) { return a && a->version >= 1 && a->Multiplayer && a->Available; }
+static MPMultiplayerApi* MpFindExport()
+{
+    typedef void* (*GetApiFn)();
+    if(void* f = dlsym(RTLD_DEFAULT, "MP_GetMultiplayerApi")) return (MPMultiplayerApi*)((GetApiFn)f)();
+    static const char* names[] = { "libMP64.so", "libMP32.so", "libMP.so" };
+    for(const char* n : names)
+    {
+        void* h = dlopen(n, RTLD_NOW | RTLD_NOLOAD);
+        if(h) { void* f = dlsym(h, "MP_GetMultiplayerApi"); if(f) return (MPMultiplayerApi*)((GetApiFn)f)(); }
+    }
+    FILE* m = fopen("/proc/self/maps", "r");                   // a renamed file: every loaded .so with "MP" in its name
+    if(!m) return NULL;
+    char line[1024]; MPMultiplayerApi* r = NULL;
+    while(!r && fgets(line, sizeof(line), m))
+    {
+        char* path = strchr(line, '/'); if(!path) continue;
+        char* nl = strchr(path, '\n'); if(nl) *nl = 0;
+        const char* base = strrchr(path, '/') + 1; size_t bl = strlen(base);
+        if(bl < 4 || strcmp(base + bl - 3, ".so") || !strstr(base, "MP")) continue;
+        void* h = dlopen(path, RTLD_NOW | RTLD_NOLOAD); if(!h) continue;
+        if(void* f = dlsym(h, "MP_GetMultiplayerApi")) r = (MPMultiplayerApi*)((GetApiFn)f)();
+    }
+    fclose(m);
+    return r;
+}
 static MPMultiplayerApi* MpApi()
 {
-    static MPMultiplayerApi* api = NULL; static int64_t triedMs = -100000;
-    if(!api && NowMs() - triedMs > 2000) { triedMs = NowMs(); api = (MPMultiplayerApi*)GetInterface("MPMultiplayer"); if(api && (api->version < 1 || !api->Multiplayer || !api->Available)) api = NULL; }
+    static MPMultiplayerApi* api = NULL; static int64_t triedMs = -100000; static int logged = 0;
+    if(!api && NowMs() - triedMs > 2000)
+    {
+        triedMs = NowMs();
+        MPMultiplayerApi* a = (MPMultiplayerApi*)GetInterface("MPMultiplayer"); const char* via = "AML interface";
+        if(!MpApiOk(a)) { a = MpFindExport(); via = "MP_GetMultiplayerApi export"; }
+        if(MpApiOk(a)) { api = a; LOGI("MULTIPLAYER: MP mod found (%s, API v%d)", via, a->version); }
+        else if(logged < 3) { ++logged; LOGI("MULTIPLAYER: no MP API yet (MP mod %s)", aml && aml->HasMod("net.thirtyfox.mp") ? "loaded, older than 4.13.10" : "not loaded"); }
+    }
     return api;
 }
+static bool MpInstalled() { return MpApi() || (aml && aml->HasMod("net.thirtyfox.mp")); }
 static bool MpAvailable() { MPMultiplayerApi* a = MpApi(); return a && a->Available() != 0; }
 
 static void ActivateMain(int idx)
@@ -1518,7 +1554,15 @@ static void ActivateMain(int idx)
     if(needsGame && !InGame()) { SndPlay(g_sndBack); SetToast(Tr("NOT AVAILABLE WITHOUT A RUNNING GAME")); LOGI("'%s' refused: no running game", e.label.c_str()); return; }
     if(e.kind == K_MP)
     {
-        if(!MpAvailable()) { SndPlay(g_sndBack); SetToast(Tr("MULTIPLAYER NOT AVAILABLE: INSTALL LIBMP IN MODS")); LOGI("MULTIPLAYER refused: no MP mod (MPMultiplayer interface)"); return; }
+        MPMultiplayerApi* a = MpApi();
+        if(!a)
+        {
+            SndPlay(g_sndBack);
+            if(aml && aml->HasMod("net.thirtyfox.mp")) { SetToast(Tr("UPDATE THE MP MOD TO 4.13.11 OR NEWER")); LOGI("MULTIPLAYER refused: MP mod too old (no MPMultiplayer API)"); }
+            else { SetToast(Tr("MULTIPLAYER NOT AVAILABLE: INSTALL LIBMP IN MODS")); LOGI("MULTIPLAYER refused: no MP mod"); }
+            return;
+        }
+        if(!a->Available()) { SndPlay(g_sndBack); SetToast(Tr("MULTIPLAYER IS STILL LOADING, TRY AGAIN")); LOGI("MULTIPLAYER refused: MP not ready yet"); return; }
         if(MenuPending()) return;
         SndPlay(g_sndSelect); LOGI("MULTIPLAYER -> MP mod"); MpApi()->Multiplayer(); return;
     }
@@ -1937,7 +1981,7 @@ static void DrawMainView()
         float left = L.cx - w * 0.5f;
         bool sel = ((int)i == g_sel);
         Col c = sel ? TH_BLUE.sel : TH_BLUE.dim;
-        if(g_entries[i].kind == K_MP && !MpAvailable()) c.a = (uint8_t)(c.a * 0.45f);   // 1.2.4: no MP mod: dimmed
+        if(g_entries[i].kind == K_MP && !MpInstalled()) c.a = (uint8_t)(c.a * 0.45f);   // 1.2.4: no MP mod: dimmed
         DrawText(g_bank, g_entries[i].label, left, cy + cap * 0.5f, L.itemScale, L.track, c);
         if(sel) DrawCursor(left, w, cy);
     }
@@ -2451,7 +2495,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.4%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.5%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     // 1.2.3: everything lives in files/TYFMC/PCMenu/ and the settings in files/TYFMC/TYFMC.PCMENU.ini (like the other
     // TYFMC mods); an old files/PCMenu/ install still works when the new folder is not there
     g_dirPC   = data + "TYFMC/PCMenu/";

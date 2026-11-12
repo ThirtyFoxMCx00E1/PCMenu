@@ -11,8 +11,10 @@
 #define DECL_HOOKv(_name, ...) static void (*_name)(__VA_ARGS__); static void HookOf_##_name(__VA_ARGS__)
 #define DECL_HOOKb(_name, ...) static bool (*_name)(__VA_ARGS__); static bool HookOf_##_name(__VA_ARGS__)
 #define DECL_HOOKi(_name, ...) static int  (*_name)(__VA_ARGS__); static int  HookOf_##_name(__VA_ARGS__)
+static bool g_stubHasMp = false;
 class IAML {
 public:
+    bool HasMod(const char*) { return g_stubHasMp; }
     uintptr_t GetSym(void*, const char*) { return 0; }
     uintptr_t GetLib(const char*) { return 0; }
     void* GetLibHandle(const char*) { return 0; }

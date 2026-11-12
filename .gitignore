@@ -4,3 +4,5 @@ assets/TYFMC/PCMenu/lang_missing.txt
 assets/TYFMC/PCMenu/idgxt_missing.txt
 dist/
 source/tools/lama_fp32.onnx
+assets/PCMenu/
+assets/TYFMC/PCMenu/lang_missing.txt

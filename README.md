@@ -21,6 +21,12 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 4. Settings: `files/TYFMC/TYFMC.PCMENU.ini`. An old `files/PCMenu/pcmenu.ini` is copied there once, and an old
    `files/PCMenu/` folder is still used if `files/TYFMC/PCMenu/` does not exist.
 
+## New in 1.2.5
+
+- Fixed: MULTIPLAYER said "MULTIPLAYER NOT AVAILABLE" with the MP mod installed. PCMenu now also finds MP through its
+  `MP_GetMultiplayerApi` export (any loaded `lib*MP*.so`), and says "UPDATE THE MP MOD" when MP is too old or
+  "MULTIPLAYER IS STILL LOADING" instead. The button is dimmed only when no MP mod is loaded. Use MP 4.13.11 or newer.
+
 ## New in 1.2.4
 
 - MULTIPLAYER button under START GAME / START NEW GAME. It opens the MP mod server list (MP 4.13.10 or newer,
