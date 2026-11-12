@@ -19,6 +19,16 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 3. Copy the `PCMenu` folder (from `assets/`) into `Android/data/com.rockstargames.gtasa/files/`.
 4. Settings: `files/PCMenu/pcmenu.ini`.
 
+## Custom arrow (1.2.3)
+
+- Put your own cursor in `files/PCMenu/pc/images/arrow_custom.png`. It wins over `arrow.png`, and no PCMenu package
+  ships that file, so updates or copying the `PCMenu` folder again never overwrite your arrow (they do overwrite `arrow.png`).
+- Any size or shape works: the picture is drawn whole with its own proportions (only the stock 64x128 `arrow.png` uses the old crop).
+- Changes show up while the game runs: the file is checked twice a second and reloaded when it changes; delete
+  `arrow_custom.png` to go back to the stock arrow.
+- Save it as an 8-bit RGBA PNG without interlacing (a JPG/WEBP renamed to `.png`, 16-bit or interlaced PNGs are refused
+  and logged; then the stock arrow stays).
+
 ## Features (1.2.0)
 
 - Language system: every text, including options other mods add, goes through one translator:

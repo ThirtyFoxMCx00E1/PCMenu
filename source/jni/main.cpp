@@ -41,9 +41,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.2, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.3, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.2, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.3, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -432,6 +432,8 @@ struct FontAtlas
 };
 static FontAtlas g_bank, g_beck;
 static void *g_texArrow = NULL, *g_texBack = NULL;
+static int g_arrowW = 0, g_arrowH = 0;            // size of the loaded arrow picture (0 = unknown)
+static void ArrowTick();                           // pcextra.h side: reload arrow.png when the file changes
 
 /* ------------------------------------------------------------------------------------------ */
 /*  Drawing primitives (all coordinates are screen pixels)                                      */
@@ -1840,12 +1842,22 @@ enum { BD_WIDE = 0, BD_BIG, BD_SMALL };
 
 static void DrawCursor(float textLeft, float textW, float rowCenterY)      // the arrow sits before the text: left of it, right of it (mirrored) when the text reads right to left
 {
+    ArrowTick();                                    // 1.2.3: a changed arrow.png is picked up again (no restart needed)
     if(!g_texArrow) return;
     bool rtl = IsRTL();
+    // stock layout (64x128, arrow in the top 62x93 texels) -> the old crop; any other picture is drawn whole,
+    // keeping its own shape, so a modified arrow.png is never cut, stretched or swapped for the old crop
+    float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f, w = L.curW, h = L.curH;
+    if(g_arrowW == 64 && g_arrowH == 128) { u1 = 62.0f / 64.0f; v0 = 2.0f / 128.0f; v1 = 95.0f / 128.0f; }
+    else if(g_arrowW > 0 && g_arrowH > 0)
+    {
+        float a = (float)g_arrowW / (float)g_arrowH, box = L.curW / L.curH;
+        if(a > box) h = w / a; else w = h * a;
+    }
     float x0, x1;
-    if(rtl) { x0 = textLeft + textW + L.curGap; x1 = x0 + L.curW; } else { x1 = textLeft - L.curGap; x0 = x1 - L.curW; }
-    float y0 = rowCenterY - L.curH * 0.5f + 0.006f * L.H, y1 = y0 + L.curH;
-    DrawTex(g_texArrow, x0, y0, x1, y1, rtl ? 62.0f / 64.0f : 0.0f, 2.0f / 128.0f, rtl ? 0.0f : 62.0f / 64.0f, 95.0f / 128.0f, COL_WHITE);
+    if(rtl) { x0 = textLeft + textW + L.curGap; x1 = x0 + w; } else { x1 = textLeft - L.curGap; x0 = x1 - w; }
+    float y0 = rowCenterY - h * 0.5f + 0.006f * L.H, y1 = y0 + h;
+    DrawTex(g_texArrow, x0, y0, x1, y1, rtl ? u1 : u0, v0, rtl ? u0 : u1, v1, COL_WHITE);
 }
 
 /* full-screen backdrop anchored to the top-right corner of the screen (16:9 / 20:9 phones) */
@@ -2111,6 +2123,52 @@ static void DrawDialogPage()
 
 #include "pcextra.h"
 
+/* ---- 1.2.3: menu arrow (pc/images/arrow_custom.png first, then pc/images/arrow.png) ----
+   The arrow was read once and drawn with the crop of the stock 64x128 picture, so an edited arrow.png came out cut /
+   stretched, or the old arrow stayed until a restart, and a package update copied the stock arrow.png over the edit.
+   Now: arrow_custom.png (never shipped, so never overwritten) wins over arrow.png, any size / shape is drawn whole,
+   and the file is watched (size + time), so a changed picture shows up the next time the menu is drawn. */
+static std::string g_arrowFile; static long long g_arrowStamp = -1; static int64_t g_arrowCheckMs = 0;
+static long long FileStamp(const std::string& p)
+{
+    struct stat st; if(stat(p.c_str(), &st) != 0) return -1;
+    return (long long)st.st_mtime * 1000003LL + (long long)st.st_size;
+}
+static bool PngReadable(const std::string& p, std::string& why)
+{
+    FILE* f = fopen(p.c_str(), "rb"); if(!f) { why = "cannot open"; return false; }
+    unsigned char b[33] = { 0 }; size_t n = fread(b, 1, sizeof(b), f); fclose(f);
+    static const unsigned char sig[8] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+    if(n < 33 || memcmp(b, sig, 8) != 0) { why = "not a PNG file (JPG / WEBP renamed to .png?)"; return false; }
+    int depth = b[24], color = b[25], lace = b[28];
+    if(depth == 16) { why = "16 bit PNG: save it as 8 bit RGBA"; return false; }
+    if(lace) { why = "interlaced PNG: save it without interlacing"; return false; }
+    (void)color; return true;
+}
+static void ArrowLoad()
+{
+    std::string c = g_dirPC + "pc/images/arrow_custom.png", d = g_dirPC + "pc/images/arrow.png";
+    std::string pick = FileExists(c) ? c : d, why;
+    void* t = NULL;
+    if(PngReadable(pick, why)) t = LoadPNG(pick.substr(g_dirPC.size()));
+    else LOGE("Arrow %s: %s", pick.c_str(), why.c_str());
+    if(!t && pick == c && PngReadable(d, why)) { pick = d; t = LoadPNG("pc/images/arrow.png"); }   // broken custom arrow: the stock one
+    g_arrowFile = pick; g_arrowStamp = FileStamp(pick);
+    if(!t) { LOGE("Cannot load %s (the arrow stays as it was)", pick.c_str()); return; }
+    if(g_texArrow && fnTexDestroy) fnTexDestroy(g_texArrow);
+    g_texArrow = t; g_arrowW = 0; g_arrowH = 0;
+    RasterSize(TexRaster(t), g_arrowW, g_arrowH);
+    LOGI("Arrow: %s (%dx%d)", pick.c_str(), g_arrowW, g_arrowH);
+}
+static void ArrowTick()                             // main thread (menu render), at most twice a second
+{
+    if(!g_resTried) return;
+    int64_t now = NowMs(); if(now - g_arrowCheckMs < 500) return; g_arrowCheckMs = now;
+    std::string c = g_dirPC + "pc/images/arrow_custom.png";
+    bool wantCustom = FileExists(c), isCustom = g_arrowFile == c;
+    if(wantCustom != isCustom || FileStamp(g_arrowFile) != g_arrowStamp) ArrowLoad();
+}
+
 /* ------------------------------------------------------------------------------------------ */
 /*  Resource loading (first frame, render thread)                                               */
 /* ------------------------------------------------------------------------------------------ */
@@ -2122,11 +2180,10 @@ static void LoadResources()
     { bool a = g_bank.LoadArabic("bank_ar"), b = g_beck.LoadArabic("beck_ar");                      // optional: Arabic glyphs
       g_arOK = ok && a && b; if(!g_arOK) g_bank.hasAr = g_beck.hasAr = false;
       LOGI(g_arOK ? "Arabic glyph atlases loaded (bank_ar, beck_ar): Arabic is available on the Language page" : "Arabic glyph atlases (bank_ar / beck_ar in %spc/fonts/) not found: Arabic is not offered", g_dirPC.c_str()); }
-    g_texArrow = LoadPNG("pc/images/arrow.png");
+    ArrowLoad();
     g_texBack  = LoadPNG("pc/images/" + g_cfgBackground);
     for(int n = 2; n <= 5; ++n) { char pth[48]; snprintf(pth, sizeof(pth), "pc/images/back%d.png", n); g_texBg[n] = LoadPNG(pth); }
     if(!ok) LOGE("Font atlases are missing in %spc/fonts/ (bank.png/.txt, beck.png/.txt). Run tools/gen_fonts.py or copy the PCMenu folder again.", g_dirPC.c_str());
-    if(!g_texArrow) LOGE("Cannot load %spc/images/arrow.png", g_dirPC.c_str());
     if(!g_texBack)  LOGE("Cannot load background %spc/images/%s (continuing without it)", g_dirPC.c_str(), g_cfgBackground.c_str());
     g_resOK = ok;                                  // cursor / backdrop are optional, fonts are not
     if(g_cfgSounds)
@@ -2368,7 +2425,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.2%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.3%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     g_dirPC   = data + "PCMenu/";
     {
         std::string root = data;                                // strip ".../files/" -> ".../<package>/"
