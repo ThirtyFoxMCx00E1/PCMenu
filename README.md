@@ -21,6 +21,14 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 4. Settings: `files/TYFMC/TYFMC.PCMENU.ini`. An old `files/PCMenu/pcmenu.ini` is copied there once, and an old
    `files/PCMenu/` folder is still used if `files/TYFMC/PCMenu/` does not exist.
 
+## New in 1.2.9
+
+- Works with the MP neon main menu (MP 4.13.25 or newer, `ServerBrowserMode=neon` in `TYFMC.MP.ini`). MP's API v3 says
+  when its neon menu owns the title screen, and PCMenu then leaves the title screen alone. The pause menu, Options and the
+  PC loading screen stay PCMenu's. With `ServerBrowserMode=mp` or `default` nothing changes.
+- MP 4.13.25 no longer hooks the loading screen while PCMenu is installed (both mods patched the same loading screen
+  functions), and hooks `MobileMenu::Render` through its `.got.plt` slot like PCMenu, so the two chain cleanly.
+
 ## New in 1.2.8
 
 - Fixed: the PC loading screen never showed (RESUME, NEW GAME / START and the title Multiplayer load). `CLoadingScreen::Init` has no PLT slot in the game, and the 64 bit game calls `RenderSplash` / `RenderLoadingBar` directly, so with `InlineHookFallback=0` the PC loading screen was switched off. The loading screen functions are now always hooked inline (PLT as the fallback).

@@ -42,9 +42,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.8, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.9, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.8, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.9, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -1247,6 +1247,7 @@ static bool AdjustableHUDUp()
 }
 
 /* Decides which stock screen (if any) the PC menu replaces this frame. */
+static bool MpNeonMenuUp();   // 1.2.9 (below, next to the MP API)
 static int EvalTakeover(void* mm, void** outTop)
 {
     g_editorUp = false;
@@ -1284,6 +1285,11 @@ static int EvalTakeover(void* mm, void** outTop)
         uint8_t pauseByte = 0;
         if(!SafeCopy((char*)top + OFF_SCR_ISPAUSE, &pauseByte, 1)) return SK_NONE;
         g_isPause = pauseByte != 0;
+        if(!g_isPause && MpNeonMenuUp())                                             // 1.2.9: MP's neon title menu owns the title screen
+        {
+            static bool l = false; if(!l) { l = true; LOGI("Title menu: the MP neon menu is up (MP ServerBrowserMode = neon) - PCMenu stands aside on the title screen"); }
+            return SK_NONE;
+        }
         if(!ReadStockItems(top))
         {
             if(!g_badLayoutLogged) { g_badLayoutLogged = true; LOGE("Stock menu item list failed validation: falling back to the stock menu."); }
@@ -1503,7 +1509,7 @@ static void OpenView(int v)
    button is drawn dimmed and only says how to get it.
    1.2.5: MP is also found through its plain export MP_GetMultiplayerApi (any loaded lib*MP*.so, whatever the file is
    called), "MP too old" and "MP still loading" get their own message, and every step is in the log. */
-struct MPMultiplayerApi { int version; void (*Multiplayer)(); int (*Available)(); int (*Loading)(); };   // Loading: v2 (MP 4.13.12)
+struct MPMultiplayerApi { int version; void (*Multiplayer)(); int (*Available)(); int (*Loading)(); int (*NeonMenu)(); };   // Loading: v2 (MP 4.13.12), NeonMenu: v3 (MP 4.13.25)
 static bool MpApiOk(MPMultiplayerApi* a) { return a && a->version >= 1 && a->Multiplayer && a->Available; }
 static MPMultiplayerApi* MpFindExport()
 {
@@ -1547,6 +1553,9 @@ static MPMultiplayerApi* MpApi()
 static bool MpInstalled() { return MpApi() || (aml && aml->HasMod("net.thirtyfox.mp")); }
 static bool MpLoading() { MPMultiplayerApi* a = g_mpApiSeen.load(); return a && a->version >= 2 && a->Loading && a->Loading() != 0; }   // 1.2.6
 static bool MpAvailable() { MPMultiplayerApi* a = MpApi(); return a && a->Available() != 0; }
+// 1.2.9: MP 4.13.25+ (API v3) says when its neon title menu owns the title screen; PCMenu then leaves the title alone
+// (MP draws its menu in the game's menu pass and hides the stock one). The pause menu and Options stay PCMenu's.
+static bool MpNeonMenuUp() { MPMultiplayerApi* a = MpApi(); return a && a->version >= 3 && a->NeonMenu && a->NeonMenu() != 0; }
 
 static void ActivateMain(int idx)
 {
@@ -2497,7 +2506,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.8%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.2.9%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     // 1.2.3: everything lives in files/TYFMC/PCMenu/ and the settings in files/TYFMC/TYFMC.PCMENU.ini (like the other
     // TYFMC mods); an old files/PCMenu/ install still works when the new folder is not there
     g_dirPC   = data + "TYFMC/PCMenu/";
