@@ -30,9 +30,13 @@ static const int kArLetterCount = (int)(sizeof(kArLetters) / sizeof(kArLetters[0
 struct ArLig { uint16_t alef, iso, fin; };                    // lam + alef variant
 static const ArLig kArLigs[] = { { 0x0622, 0xFEF5, 0xFEF6 }, { 0x0623, 0xFEF7, 0xFEF8 }, { 0x0625, 0xFEF9, 0xFEFA }, { 0x0627, 0xFEFB, 0xFEFC } };
 
-#define AR_GLYPHS 128                                         // atlas slots: U+FE80..U+FEFC (125), then U+060C, U+061B, U+061F
+#define AR_GLYPHS 137                                         // atlas slots: U+FE80..U+FEFC (125), then U+060C, U+061B, U+061F, then (1.3.0) the harakat
+static bool ArIsHaraka(unsigned c) { return (c >= 0x064B && c <= 0x0652) || c == 0x0670; }   // fathatan dammatan kasratan fatha damma kasra shadda sukun, superscript alef
+static bool ArBelow(unsigned c) { return c == 0x064D || c == 0x0650; }                      // kasratan / kasra sit under the letter
 static int ArSlot(unsigned code)
 {
+    if(code >= 0x064B && code <= 0x0652) return 128 + (int)(code - 0x064B);
+    if(code == 0x0670) return 136;
     if(code >= 0xFE80 && code <= 0xFEFC) return (int)(code - 0xFE80);
     if(code == 0x060C) return 125;
     if(code == 0x061B) return 126;
@@ -87,9 +91,10 @@ static const ArLetter* ArLetterOf(uint32_t cp)
     for(int i = 0; i < kArLetterCount; ++i) if(kArLetters[i].base == cp) return &kArLetters[i];
     return NULL;
 }
-static bool ArIsMark(uint32_t cp) { return (cp >= 0x064B && cp <= 0x065F) || cp == 0x0670 || cp == 0x0640 || cp == 0x200C || cp == 0x200D || cp == 0x200E || cp == 0x200F; }   // vowel signs, tatweel, joiners: not drawn
+static bool ArIsMark(uint32_t cp) { return (cp >= 0x064B && cp <= 0x065F) || cp == 0x0670 || cp == 0x0640 || cp == 0x200C || cp == 0x200D || cp == 0x200E || cp == 0x200F; }   // vowel signs, tatweel, joiners: never break the joining of letters
+/* 1.3.0: harakat are transparent for joining (a letter joins its neighbour through them) and are drawn over / under their letter */
 
-struct ArItem { uint16_t code; uint8_t dir; uint8_t kind; };   // dir: 0 = left-to-right, 1 = right-to-left, 2 = neutral (resolved below); kind: 1 digit, 2 number separator, 3 percent
+struct ArItem { uint16_t code; uint8_t dir; uint8_t kind; uint16_t mk[3]; };   // mk: up to 3 harakat on this glyph (0 = none)   // dir: 0 = left-to-right, 1 = right-to-left, 2 = neutral (resolved below); kind: 1 digit, 2 number separator, 3 percent
 static bool ArIsDigit(uint32_t c) { return (c >= '0' && c <= '9') || (c >= 0x0660 && c <= 0x0669); }
 static bool ArIsBracket(unsigned c, unsigned* mirror)
 {
@@ -98,13 +103,24 @@ static bool ArIsBracket(unsigned c, unsigned* mirror)
     return false;
 }
 
-/* Visual order glyph codes of one line of text (base direction right-to-left). */
+static void ArEmit(const ArItem& it, std::vector<uint16_t>& out) { out.push_back(it.code); for(int k = 0; k < 3; ++k) if(it.mk[k]) out.push_back(it.mk[k]); }   // a glyph, then its harakat
+
+/* Visual order glyph codes of one line of text (base direction right-to-left). Harakat follow the glyph they belong to. */
 static void ArShape(const std::string& text, std::vector<uint16_t>& out)
 {
     out.clear();
     std::vector<uint32_t> raw, cps;
+    std::vector<uint64_t> marks;                                // the harakat of cps[i], packed 3 x 16 bit
     Utf8ToCps(text, raw);
-    for(size_t i = 0; i < raw.size(); ++i) if(!ArIsMark(raw[i])) cps.push_back(raw[i]);
+    for(size_t i = 0; i < raw.size(); ++i)
+    {
+        if(!ArIsMark(raw[i])) { cps.push_back(raw[i]); marks.push_back(0); continue; }
+        if(ArIsHaraka(raw[i]) && !cps.empty() && ArLetterOf(cps.back()))
+        {
+            uint64_t& m = marks.back();
+            for(int k = 0; k < 3; ++k) if(((m >> (16 * k)) & 0xFFFF) == 0) { m |= (uint64_t)raw[i] << (16 * k); break; }
+        }
+    }
     const size_t n = cps.size();
     std::vector<ArItem> items; items.reserve(n);
 
@@ -121,16 +137,22 @@ static void ArShape(const std::string& text, std::vector<uint16_t>& out)
             {
                 const ArLig* lig = NULL;
                 for(size_t k = 0; k < sizeof(kArLigs) / sizeof(kArLigs[0]); ++k) if(kArLigs[k].alef == N->base) lig = &kArLigs[k];
-                if(lig) { ArItem it = { joinPrev ? lig->fin : lig->iso, 1, 0 }; items.push_back(it); ++i; continue; }
+                if(lig)
+                {
+                    ArItem it = { joinPrev ? lig->fin : lig->iso, 1, 0, { 0, 0, 0 } };
+                    int k = 0;
+                    for(int q = 0; q < 2; ++q) for(int b = 0; b < 3 && k < 3; ++b) { uint16_t c2 = (uint16_t)((marks[i + q] >> (16 * b)) & 0xFFFF); if(c2) it.mk[k++] = c2; }
+                    items.push_back(it); ++i; continue;
+                }
             }
             bool joinNext = (L->ini != 0) && N && N->fin != 0;       // we connect to the left and the next letter takes a connection
             if(joinPrev && L->fin == 0) joinPrev = false;
             uint16_t code = (joinPrev && joinNext) ? L->med : joinPrev ? L->fin : joinNext ? L->ini : L->iso;
             if(!code) code = L->iso;
-            ArItem it = { code, 1, 0 }; items.push_back(it);
+            ArItem it = { code, 1, 0, { (uint16_t)(marks[i] & 0xFFFF), (uint16_t)((marks[i] >> 16) & 0xFFFF), (uint16_t)((marks[i] >> 32) & 0xFFFF) } }; items.push_back(it);
             continue;
         }
-        ArItem it = { (uint16_t)'?', 2, 0 };
+        ArItem it = { (uint16_t)'?', 2, 0, { 0, 0, 0 } };
         if(ArIsDigit(c)) { it.code = (uint16_t)(c >= 0x0660 ? '0' + (c - 0x0660) : c); it.dir = 0; it.kind = 1; }
         else if((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) { it.code = (uint16_t)c; it.dir = 0; }
         else if(c == 0x060C || c == 0x061B || c == 0x061F) { it.code = (uint16_t)c; it.dir = 2; }
@@ -163,8 +185,8 @@ static void ArShape(const std::string& text, std::vector<uint16_t>& out)
     while(end > 0)
     {
         size_t start = end; while(start > 0 && items[start - 1].dir == items[end - 1].dir) --start;
-        if(items[end - 1].dir == 1) for(size_t k = end; k > start; --k) out.push_back(items[k - 1].code);
-        else                        for(size_t k = start; k < end; ++k) out.push_back(items[k].code);
+        if(items[end - 1].dir == 1) for(size_t k = end; k > start; --k) ArEmit(items[k - 1], out);
+        else                        for(size_t k = start; k < end; ++k) ArEmit(items[k], out);
         end = start;
     }
 }

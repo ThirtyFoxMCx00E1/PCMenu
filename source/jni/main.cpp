@@ -42,9 +42,9 @@
 #define LOGE(...) logger->Error(__VA_ARGS__)
 
 #ifdef PCMENU_TRANSPARENT
-MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.2.9, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu (Transparent), 1.3.0, PCMenu)
 #else
-MYMOD(net.gtasa.pcmenu, PC Menu, 1.2.9, PCMenu)
+MYMOD(net.gtasa.pcmenu, PC Menu, 1.3.0, PCMenu)
 #endif
 NEEDGAME(com.rockstargames.gtasa)
 
@@ -420,6 +420,7 @@ struct FontAtlas
     {
         if(code == ' ') return GetAr(0xFE8D).adv * scale;      // a space between Arabic words: as wide as an alef (about a third of the em), not the wide PC-font space
         if(code < 128) return Get((unsigned char)code).adv * scale * xs + (code == ' ' ? spaceEx : 0) + (last ? 0 : track);
+        if(ArIsHaraka(code)) return 0;                         // harakat take no room: drawn over / under the letter before them
         return GetAr(code).adv * scale;
     }
     float Width(const std::string& s, float scale, float track) const
@@ -478,9 +479,23 @@ static void DrawText(const FontAtlas& f, const std::string& s, float x, float ba
     if(f.hasAr && HasArabic(s))                              // Arabic: joined letter forms in visual order (arabic.h), from the companion atlas
     {
         std::vector<uint16_t> sh; ArShape(s, sh);
+        float bx0 = pen, bx1 = pen, above = baseline, below = baseline;   // box of the last letter drawn, and where its next haraka goes
         for(size_t i = 0; i < sh.size(); ++i)
         {
             unsigned code = sh[i];
+            if(ArIsHaraka(code))                             // 1.3.0: centred over (or under) its letter, stacked (shadda + fatha)
+            {
+                int si = ArSlot(code);
+                if(si >= 0 && f.ar[si].valid && f.ar[si].w > 0 && f.ar[si].h > 0)
+                {
+                    const Glyph& g = f.ar[si];
+                    float w = g.w * scale, h = g.h * scale, gap = 0.08f * f.capH * scale, cx = 0.5f * (bx0 + bx1);
+                    float y0 = ArBelow(code) ? below + gap : above - gap - h;
+                    DrawTex(f.texAr, cx - 0.5f * w, y0, cx + 0.5f * w, y0 + h, g.u0, g.v0, g.u1, g.v1, c);
+                    if(ArBelow(code)) below = y0 + h; else above = y0;
+                }
+                continue;                                    // (an atlas without harakat: they are simply left out, as before 1.3.0)
+            }
             if(code < 128)                                   // Latin letter / digit / space between Arabic words: the PC font
             {
                 const Glyph& g = f.Get((unsigned char)code);
@@ -498,6 +513,8 @@ static void DrawText(const FontAtlas& f, const std::string& s, float x, float ba
                 {
                     const Glyph& g = f.ar[si];
                     if(g.w > 0 && g.h > 0) DrawTex(f.texAr, pen + g.xoff * scale, baseline + g.yoff * scale, pen + (g.xoff + g.w) * scale, baseline + (g.yoff + g.h) * scale, g.u0, g.v0, g.u1, g.v1, c);
+                    bx0 = pen + g.xoff * scale; bx1 = pen + (g.xoff + g.w) * scale; above = baseline + g.yoff * scale; below = baseline + (g.yoff + g.h) * scale;
+                    if(g.w <= 0 || g.h <= 0) { bx0 = pen; bx1 = pen + g.adv * scale; above = below = baseline; }
                 }
                 else { const Glyph& q = f.Get('?'); if(q.w > 0 && q.h > 0) DrawTex(f.tex, pen + q.xoff * scale * f.xs, baseline + q.yoff * scale, pen + (q.xoff + q.w) * scale * f.xs, baseline + (q.yoff + q.h) * scale, q.u0, q.v0, q.u1, q.v1, c); }
             }
@@ -1013,6 +1030,10 @@ static std::string TitleCase(const std::string& in)      // "GAME" -> "Game" (on
     }
     return r;
 }
+/* 1.3.0: the page title remembers where its text came from, so a language switch re-translates it (mod tabs included) */
+static std::string g_pageTitleKey; static int g_pageTitleMode = 0;     // 0 = fixed text, 1 = PC menu phrase (Tr), 2 = text key / mod tab name (Resolve)
+static std::string PageTitleText() { return g_pageTitleMode == 1 ? SmallWords(TitleCase(Tr(g_pageTitleKey.c_str()))) : SmallWords(TitleCase(Resolve(g_pageTitleKey.c_str()))); }
+static void SetPageTitle(int mode, const char* key) { g_pageTitleMode = mode; g_pageTitleKey = key ? key : ""; if(mode && !g_pageTitleKey.empty()) g_pageTitle = PageTitleText(); }
 static std::string TitleOf(const char* en) { return SmallWords(TitleCase(Tr(en))); }      // backdrop title ("Main Menu") in the PC menu language
 static std::string NormName(const std::string& s)        // lower-case letters+digits only, "lib" prefix and ".so/32/64/sa" suffixes removed
 {
@@ -1041,13 +1062,45 @@ static uint8_t* SettingsBase()
 }
 static bool ReadSetting(int id, SView& v)
 {
-    if(id < 0 || id > 1023) return false;
+    if(id < 0 || id > 1199) return false;              // SAUtils grows the settings array to 1200 entries
     uint8_t* base = SettingsBase(); if(!base) return false;
     uint8_t buf[64];
     if(!SafeCopy(base + (size_t)id * SET_STRIDE, buf, SET_STRIDE)) return false;
     memcpy(&v.value, buf + SET_VALUE, 4); memcpy(&v.vmin, buf + SET_MIN, 4); memcpy(&v.vmax, buf + SET_MAX, 4); memcpy(&v.type, buf + SET_TYPE, 4);
     memcpy(&v.names, buf + SET_NAMES, sizeof(void*));
     return true;
+}
+/* SAUtils sliders can carry their own value text (AddSliderItem's OnSettingDrawedFn: "CUSTOM", "6000", "0.70" in VehDeform).
+   SAUtils keeps its items in the exported std::vector<AdditionalSetting*> gMoreSettings; the layout below mirrors its sautils.h. */
+struct SAUAddSetting
+{
+    int nSettingId; unsigned char eType, byteItemType; char szName[32];
+    void* fnOnValueChange; const char* (*fnOnValueDraw)(int, void*); void* fnOnButtonPressed;
+    int nInitVal, nSavedVal, nMaxVal; void* pOwnData;
+};
+static void** g_sauVec = NULL; static int g_sauTries = 0;
+static bool SAUtilsValueText(int setId, int value, std::string& out)
+{
+    if(setId < 37) return false;                          // SAUtils' own items start at id 37
+    if(!g_sauVec && g_sauTries < 8)
+    {
+        ++g_sauTries;
+        void* h = dlopen("libSAUtils.so", RTLD_NOW | RTLD_NOLOAD);
+        if(h) { g_sauVec = (void**)dlsym(h, "gMoreSettings"); dlclose(h); if(g_sauVec) LOGI("SAUtils slider texts: gMoreSettings at %p", (void*)g_sauVec); }
+    }
+    if(!g_sauVec) return false;
+    SAUAddSetting** b = NULL; SAUAddSetting** e = NULL;   // libc++ vector: begin, end, capacity
+    if(!SafeCopy(g_sauVec, &b, sizeof(b)) || !SafeCopy(g_sauVec + 1, &e, sizeof(e)) || !b || e < b || e - b > 1200) return false;
+    for(SAUAddSetting** p = b; p < e; ++p)
+    {
+        SAUAddSetting* a = NULL; SAUAddSetting cp;
+        if(!SafeCopy(p, &a, sizeof(a)) || !a || !SafeCopy(a, &cp, sizeof(cp)) || cp.nSettingId != setId) continue;
+        if(!cp.fnOnValueDraw) return false;
+        const char* t = cp.fnOnValueDraw(value, cp.pOwnData);
+        char buf[64]; if(!t || !SafeCString(t, buf, sizeof(buf)) || !buf[0]) return false;
+        out = buf; return true;
+    }
+    return false;
 }
 static void ApplySideEffect(int id)                      // what SettingSelection::HandleInput does after a change (ids decoded from its jump table)
 {
@@ -1247,6 +1300,7 @@ static bool AdjustableHUDUp()
 }
 
 /* Decides which stock screen (if any) the PC menu replaces this frame. */
+static void RetranslateModRows();   // 1.3.0 (below)
 static bool MpNeonMenuUp();   // 1.2.9 (below, next to the MP API)
 static int EvalTakeover(void* mm, void** outTop)
 {
@@ -1260,7 +1314,9 @@ static int EvalTakeover(void* mm, void** outTop)
         if(again)
         {
             g_optRowsGen = 0xFFFFFFFFu; g_pageRowsTop = NULL; g_dlgTop = NULL;       // (a dialog screen at the same address with the same key would keep its text of the old language)
-            if(g_vtLanguage && g_activeVt == g_vtLanguage) g_pageTitle = SmallWords(TitleCase(Resolve("FEO_LAN")));
+            if(g_vtLanguage && g_activeVt == g_vtLanguage) SetPageTitle(2, "FEO_LAN");
+            else if(g_pageTitleMode && !g_pageTitleKey.empty()) g_pageTitle = PageTitleText();   // any other page (a mod's tab too) follows the new language
+            RetranslateModRows();                                                              // tab names of mods (in place: the list itself stays)
         }
     }
     char* m = (char*)mm;
@@ -1385,6 +1441,15 @@ static std::string ModDisplayName(const std::string& file, bool isDir)
     return Upper(n);
 }
 
+static void RetranslateModRows()
+{
+    for(size_t i = 0; i < g_modRows.size(); ++i)
+    {
+        ModRow& r = g_modRows[i];
+        if(r.kind == MR_SETTINGS) { r.label = Tr("MODS SETTINGS"); r.file = Tr("OPEN THE CONFIGURATION OF YOUR MODS"); }
+        else if(r.kind == MR_TAB && r.idx >= 0 && r.idx < g_stockCount) { r.label = Upper(Resolve(g_stockKeys[r.idx])); r.file = Tr("SETTINGS") + ": " + g_stockKeys[r.idx]; }
+    }
+}
 static void RefreshModRows()
 {
     g_modRows.clear();
@@ -1398,7 +1463,7 @@ static void RefreshModRows()
     for(int i = 0; i < g_stockCount; ++i)
     {
         if(!g_stockKeys[i][0] || !g_stock[i].cb || IsStandardKey(g_stockKeys[i])) continue;
-        ModRow r; r.label = Upper(g_stockKeys[i]); r.file = Tr("SETTINGS") + ": " + g_stockKeys[i]; r.cb = g_stock[i].cb; r.kind = MR_TAB; r.idx = i;
+        ModRow r; r.label = Upper(Resolve(g_stockKeys[i])); r.file = Tr("SETTINGS") + ": " + g_stockKeys[i]; r.cb = g_stock[i].cb; r.kind = MR_TAB; r.idx = i;   // 1.3.0: a mod's tab name is translated like any other text
         g_modRows.push_back(r);
     }
     int head = (int)g_modRows.size();
@@ -1610,7 +1675,7 @@ static void StartNav(const std::string& filter)
     g_nav = NAV_WAIT_OPTIONS; g_navFrames = 0; g_navFilter = filter; g_returnToMods = true;
     g_modsSelSaved = g_sel; g_modsScrollSaved = g_scroll;
     g_pendingRootView = VIEW_MODS;                                   // when we land on the root screen again, reopen the Mods list
-    g_pageTitle = SmallWords(TitleCase(Tr("MODS SETTINGS"))); g_pageBg = 2;
+    SetPageTitle(1, "MODS SETTINGS"); g_pageBg = 2;
     LOGI("Opening mod settings (filter '%s')", filter.c_str());
     fnOnSettings();
 }
@@ -1792,6 +1857,7 @@ static void ActivatePageRow(int i)
         SndPlay(g_sndSelect);
         g_pageTitle = SmallWords(g_optRows[i].title);
         { const char* k = g_optRows[i].idx >= 0 && g_optRows[i].idx < g_optCache.n ? g_optCache.keys[g_optRows[i].idx] : "";
+          if(k[0]) SetPageTitle(2, k); else g_pageTitleMode = 0;
           g_pageBg = !strcmp(k, "FEO_AUD") ? 5 : !strcmp(k, "FEO_DIS") ? 3 : (!strcmp(k, "FEC_RED") || !strcmp(k, "FEO_CON")) ? 2 : (!strcmp(k, "FEH_LOA") || !strcmp(k, "FEO_GAM") || !strcmp(k, "FEO_LAN")) ? 4 : -1; }   // (the real tile keys: Game = FEH_LOA, Controls = FEC_RED)
         VoidFn cb = g_optRows[i].cb;
         LOGI("Options -> '%s' (tile %d, %p)", g_optRows[i].title.c_str(), g_optRows[i].idx, (void*)cb);
@@ -2170,8 +2236,10 @@ static void DrawSettingsPage()
                 float barL = rtl ? L.W - L.pValueR : L.pValueR - L.pBarW;
                 DrawTicks(barL + L.pBarW, cy, f, th.sel, Col{ 44, 50, 58, 255 }, rtl);
                 char pc[16]; snprintf(pc, sizeof(pc), "%d%%", (int)(f * 100.0f + 0.5f));
-                float w = g_bank.Width(pc, sc, L.track);
-                DrawText(g_bank, pc, rtl ? barL + L.pBarW + 0.015f * L.W : barL - 0.015f * L.W - w, cy + cap * 0.5f, sc, L.track, c);
+                std::string vt = pc, own;
+                if(SAUtilsValueText(r.setId, v.value, own)) vt = Fit(g_bank, Tr(Upper(own).c_str()), sc, L.track, 0.16f * L.W);   // the mod's own text (e.g. "CUSTOM", "6000")
+                float w = g_bank.Width(vt, sc, L.track);
+                DrawText(g_bank, vt, rtl ? barL + L.pBarW + 0.015f * L.W : barL - 0.015f * L.W - w, cy + cap * 0.5f, sc, L.track, c);
             }
         }
     }
@@ -2506,7 +2574,7 @@ extern "C" void OnModLoad()
     std::string data = aml->GetAndroidDataPath();             // .../Android/data/<pkg>/files/
     if(data.empty()) { LOGE("AML returned no data path."); return; }
     if(data.back() != '/') data += '/';
-    LOGI("PCMenu 1.2.9%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
+    LOGI("PCMenu 1.3.0%s (%s) starting; data dir %s", kTransparentBuild ? " Transparent" : "", BYBIT("32-bit", "64-bit"), data.c_str());
     // 1.2.3: everything lives in files/TYFMC/PCMenu/ and the settings in files/TYFMC/TYFMC.PCMENU.ini (like the other
     // TYFMC mods); an old files/PCMenu/ install still works when the new folder is not there
     g_dirPC   = data + "TYFMC/PCMenu/";

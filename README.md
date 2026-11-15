@@ -21,6 +21,16 @@ Install one variant only. Both share the AML GUID `net.gtasa.pcmenu`, so AML loa
 4. Settings: `files/TYFMC/TYFMC.PCMENU.ini`. An old `files/PCMenu/pcmenu.ini` is copied there once, and an old
    `files/PCMenu/` folder is still used if `files/TYFMC/PCMenu/` does not exist.
 
+## New in 1.3.0
+
+- Arabic harakat (fatha, damma, kasra, sukun, shadda, tanween and the dagger alef) are drawn over or under their
+  letter, stacked when there are two (for example shadda + fatha). Letters keep joining around them. The Arabic font
+  atlases (`bank_ar`, `beck_ar`) now also hold the marks; an older atlas just skips them.
+- Mod sliders made with SAUtils that show their own value text (for example VehDeform's `CUSTOM`, `6000`, `0.70`)
+  now show that text instead of a percentage. Settings ids up to 1199 are read (SAUtils allows 1200).
+- Auto translation: the page title and the mod tab names follow the language. When you switch languages, the open
+  page and every mod tab are translated at once, and new tab pages are translated when they open.
+
 ## New in 1.2.9
 
 - Works with the MP neon main menu (MP 4.13.25 or newer, `ServerBrowserMode=neon` in `TYFMC.MP.ini`). MP's API v3 says

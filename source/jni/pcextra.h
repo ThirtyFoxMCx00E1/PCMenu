@@ -297,7 +297,7 @@ static void ActivateModRow(int r)
     if(r == (int)g_modRows.size()) { SndPlay(g_sndBack); OpenView(VIEW_MAIN); return; }
     if(r < 0 || r > (int)g_modRows.size()) return;
     ModRow& mr = g_modRows[r];
-    if(mr.kind == MR_TAB && mr.cb) { SndPlay(g_sndSelect); VoidFn cb = mr.cb; LOGI("Mods action '%s' (tile %d) -> %p", mr.label.c_str(), mr.idx, (void*)cb); CallTile(g_activeTop, mr.idx, cb); }
+    if(mr.kind == MR_TAB && mr.cb) { SndPlay(g_sndSelect); if(mr.idx >= 0 && mr.idx < g_stockCount) SetPageTitle(2, g_stockKeys[mr.idx]); VoidFn cb = mr.cb; LOGI("Mods action '%s' (tile %d) -> %p", mr.label.c_str(), mr.idx, (void*)cb); CallTile(g_activeTop, mr.idx, cb); }
     else if(mr.kind == MR_SETTINGS) { SndPlay(g_sndSelect); StartNav(""); }
     else if(mr.kind == MR_FILE && g_pcOptions && fnOnSettings) { SndPlay(g_sndSelect); StartNav(mr.label); }
 }

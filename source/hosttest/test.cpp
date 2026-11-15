@@ -905,14 +905,20 @@ int main()
 
         // the atlases the generator made are readable (the test replays them as textures 5 and 6)
         CHECK(g_bank.ar[ArSlot(0xFE8D)].valid && g_bank.ar[ArSlot(0xFEFB)].valid && g_bank.ar[ArSlot(0x061F)].valid && g_beck.ar[ArSlot(0xFEDF)].valid);
-        { int n = 0; for(int i = 0; i < AR_GLYPHS; ++i) n += g_bank.ar[i].valid; CHECK(n == 128); }
+        { int n = 0; for(int i = 0; i < AR_GLYPHS; ++i) n += g_bank.ar[i].valid; CHECK(n == 137); }   // 1.3.0: + 9 harakat
         // every form the shaper can produce has a glyph in both atlases
         { bool all = true; for(int i = 0; i < kArLetterCount; ++i) { const uint16_t f[4] = { kArLetters[i].iso, kArLetters[i].fin, kArLetters[i].ini, kArLetters[i].med };
               for(int k = 0; k < 4; ++k) if(f[k] && !(g_bank.ar[ArSlot(f[k])].valid && g_beck.ar[ArSlot(f[k])].valid)) all = false; }
           for(auto& l : kArLigs) if(!(g_bank.ar[ArSlot(l.iso)].valid && g_bank.ar[ArSlot(l.fin)].valid)) all = false; CHECK(all); }
 
         // ---- shaping: joined forms, lam-alef, direction
-        CHECK(Same(Codes("\xD9\x83\xD8\xAA\xD8\xA7\xD8\xA8"), { 0xFE8F, 0xFE8E, 0xFE98, 0xFEDB }));                   // kitab: beh isolated (after alef), alef final, teh medial, kaf initial; visual order = reversed
+        CHECK(Same(Codes("\xD9\x83\xD8\xAA\xD8\xA7\xD8\xA8"), { 0xFE8F, 0xFE8E, 0xFE98, 0xFEDB }));
+        // 1.3.0 harakat: transparent for joining, emitted right after their letter, no width, drawn over / under it
+        CHECK(Same(Codes("\xD9\x83\xD9\x8E\xD8\xAA\xD9\x8E\xD8\xA8\xD9\x8E"), { 0xFE90, 0x064E, 0xFE98, 0x064E, 0xFEDB, 0x064E }));   // kataba: forms as without the marks
+        CHECK(Same(Codes("\xD9\x84\xD9\x8E\xD8\xA7"), { 0xFEFB, 0x064E }));                                           // la with fatha on the lam: the ligature keeps it
+        CHECK(Same(Codes("\xD8\xB1\xD9\x8E\xD8\xA8\xD9\x91\xD9\x90"), { 0xFE8F, 0x0651, 0x0650, 0xFEAD, 0x064E }));       // rabbi: shadda + kasra on one letter
+        CHECK(Same(Codes("\xD9\x83\xD8\xAA\xD8\xA7\xD8\xA8\xD9\x8B"), { 0xFE8F, 0x064B, 0xFE8E, 0xFE98, 0xFEDB }));     // kitaban: tanween
+        { bool all = true; for(unsigned c : { 0x064B, 0x064C, 0x064D, 0x064E, 0x064F, 0x0650, 0x0651, 0x0652, 0x0670 }) if(!(g_bank.ar[ArSlot(c)].valid && g_beck.ar[ArSlot(c)].valid)) all = false; CHECK(all); }                   // kitab: beh isolated (after alef), alef final, teh medial, kaf initial; visual order = reversed
         CHECK(Same(Codes("\xD9\x83\xD9\x84\xD8\xA7"), { 0xFEFC, 0xFEDB }));                                          // kaf + lam-alef: the final ligature, kaf initial
         CHECK(Same(Codes("\xD9\x84\xD8\xA7"), { 0xFEFB }));                                                         // lam-alef alone: isolated ligature
         CHECK(Same(Codes("\xD9\x84\xD8\xA3"), { 0xFEF7 }) && Same(Codes("\xD9\x84\xD8\xA5"), { 0xFEF9 }) && Same(Codes("\xD9\x84\xD8\xA2"), { 0xFEF5 }));
@@ -924,7 +930,7 @@ int main()
         CHECK(Same(Codes("\xD9\x85\xD9\x88\xD8\xAF 12.5%"), { '1', '2', '.', '5', '%', ' ', 0xFEA9, 0xFEEE, 0xFEE3 }));   // numbers stay together, left to right, left of the word
         CHECK(Codes("\xD9\x86\xD8\xB9\xD9\x85\xD8\x9F")[0] == 0x061F);                                               // the question mark ends the sentence: left end
         CHECK(Same(Codes("(\xD8\xA7)"), { '(', 0xFE8D, ')' }));                                                      // brackets are mirrored with the run: "(alef)" stays visually "(alef)"
-        CHECK(Codes("\xD9\x85\xD9\x88\xD8\xAF\xD9\x8E") == Codes("\xD9\x85\xD9\x88\xD8\xAF"));                    // vowel signs (fatha) are dropped
+        CHECK(Same(Codes("\xD9\x85\xD9\x88\xD8\xAF\xD9\x8E"), { 0xFEA9, 0x064E, 0xFEEE, 0xFEE3 }));                    // 1.3.0: a vowel sign (fatha) is kept, right after its letter (dal)
         CHECK(Codes("\xD9\x83\xD9\x80\xD8\xA8") == Codes("\xD9\x83\xD8\xA8"));                                  // tatweel dropped
         CHECK(HasArabic("a\xD8\xA7") && !HasArabic("abc ?") && !HasArabic(""));
         { std::string t = "ab\xD8\xA7\xD9\x84"; Utf8Pop(t); CHECK(t == "ab\xD8\xA7"); Utf8Pop(t); Utf8Pop(t); CHECK(t == "a"); Utf8Pop(t); Utf8Pop(t); CHECK(t.empty()); }   // never half a character

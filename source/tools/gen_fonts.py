@@ -12,7 +12,7 @@ output (inside <PCMenu dir>/pc/fonts/):
     beck_ar.png beck_ar.txt  (Arabic glyphs for the titles)
 
 The Arabic atlases hold the *presentation forms* (U+FE80..U+FEFC: isolated / final / initial / medial letters and the lam-alef
-ligatures) plus the Arabic comma, semicolon and question mark. The mod picks the right form itself (see jni/arabic.h), so the
+ligatures) plus the Arabic comma, semicolon and question mark, and (1.3.0) the harakat U+064B..U+0652 / U+0670. The mod picks the right form itself (see jni/arabic.h), so the
 font only has to be a plain TrueType file with those code points: DejaVu Sans Bold (free licence, shipped with most Linux
 distributions) is used by default. Glyphs are rendered so that the height of the letter alef matches the cap height of the
 Latin atlas they sit next to (bank: 1.45 x, beck: 1.10 x since 1.1.8; they were 1.12 / 0.95 before).
@@ -67,7 +67,8 @@ def build(ttf, out_png, out_txt):
 
 
 ARABIC_DEFAULT = ['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf']
-AR_CODES = [c for c in range(0xFE80, 0xFEFD)] + [0x060C, 0x061B, 0x061F]
+AR_MARKS = [c for c in range(0x064B, 0x0653)] + [0x0670]     # 1.3.0: harakat (fathatan .. sukun, superscript alef), drawn over / under their letter
+AR_CODES = [c for c in range(0xFE80, 0xFEFD)] + [0x060C, 0x061B, 0x061F] + AR_MARKS
 
 def build_arabic(ttf, out_png, out_txt, alef_target):
     """Atlas of Arabic presentation forms, sized so that the alef is alef_target pixels tall."""
@@ -83,6 +84,12 @@ def build_arabic(ttf, out_png, out_txt, alef_target):
         if code not in cmap: continue
         ch = chr(code)
         x0, y0, x1, y1 = font.getbbox(ch, anchor='ls')
+        if code in AR_MARKS:                                   # a mark's reported box reaches down to the baseline: use its real ink
+            tmp = Image.new('L', (size * 4, size * 4), 0)
+            ImageDraw.Draw(tmp).text((size * 2, size * 2), ch, font=font, fill=255, anchor='ls')
+            bb = tmp.getbbox()
+            if not bb: continue
+            x0, y0, x1, y1 = bb[0] - size * 2, bb[1] - size * 2, bb[2] - size * 2, bb[3] - size * 2
         glyphs.append((code, ch, x0, y0, x1, y1, font.getlength(ch)))
     aw = 1024
     x = y = row_h = 0

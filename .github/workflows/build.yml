@@ -1,0 +1,32 @@
+name: Build PCMenu
+on:
+  push:
+    paths: ['source/jni/**', '.github/workflows/build.yml']
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            source
+            .github
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27
+      - name: ndk-build
+        run: |
+          cd source
+          "${{ steps.ndk.outputs.ndk-path }}/ndk-build" NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk -j4
+          mkdir -p ../out
+          cp libs/armeabi-v7a/libPCMenu32.so ../out/PCMenu32.so
+          cp libs/armeabi-v7a/libPCMenuT32.so ../out/PCMenuT32.so
+          cp libs/arm64-v8a/libPCMenu64.so ../out/PCMenu64.so
+          cp libs/arm64-v8a/libPCMenuT64.so ../out/PCMenuT64.so
+          ls -l ../out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PCMenu-binaries
+          path: out/*.so
